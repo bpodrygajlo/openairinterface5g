@@ -534,6 +534,10 @@ struct openair0_device {
    */
   int (*trx_stop_func)(openair0_device_t *device);
 
+  /*! \brief Get timestamp from timespec
+  */
+  openair0_timestamp_t (*get_timestamp)(openair0_device_t *device, struct timespec *ts);
+
   /* Functions API related to UE*/
 
   /*! \brief Set RX feaquencies
