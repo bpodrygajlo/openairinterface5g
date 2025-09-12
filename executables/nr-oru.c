@@ -303,3 +303,23 @@ void *oru_north_read_thread(void *arg)
   }
   return NULL;
 }
+
+void *oru_south_read_thread(void *arg)
+{
+  ORU_t *oru = arg;
+  RU_t *ru = oru->ru;
+
+  const int num_samples = 3000;
+  c16_t throwaway_samples[ru->nb_rx][num_samples];
+  void *rxp[ru->nb_rx];
+  for (int i = 0; i < ru->nb_rx; i++)
+    rxp[i] = throwaway_samples[i];
+
+  openair0_timestamp_t timestamp;
+  while (!oai_exit) {
+    ru->rfdevice.trx_read_func(&ru->rfdevice, &timestamp, rxp, num_samples, ru->nb_rx);
+  }
+
+  // Perform RX processing
+  return NULL;
+}
