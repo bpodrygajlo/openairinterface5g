@@ -494,7 +494,7 @@ static radio_tx_gpio_flag_t get_gpio_flags(RU_t *ru, int slot)
   return flags_gpio;
 }
 
-void tx_rf(RU_t *ru, int frame,int slot, uint64_t timestamp)
+void tx_rf_symbols(RU_t *ru, int frame, int slot, uint64_t timestamp, int start_symbol, int num_symbols)
 {
   RU_proc_t *proc = &ru->proc;
   NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
@@ -521,22 +521,23 @@ void tx_rf(RU_t *ru, int frame,int slot, uint64_t timestamp)
           txsymb++;
       }
 
-      AssertFatal(txsymb>0,"illegal txsymb %d\n",txsymb);
+      AssertFatal(txsymb > 0, "illegal txsymb %d\n", txsymb);
 
-      if (fp->slots_per_subframe == 1) {
-        if (txsymb <= 7)
-          siglen = (fp->ofdm_symbol_size + fp->nb_prefix_samples0) + (txsymb - 1) * (fp->ofdm_symbol_size + fp->nb_prefix_samples);
-        else
-          siglen = 2 * (fp->ofdm_symbol_size + fp->nb_prefix_samples0) + (txsymb - 2) * (fp->ofdm_symbol_size + fp->nb_prefix_samples);
-      } else {
-        if(slot%(fp->slots_per_subframe/2))
-          siglen = txsymb * (fp->ofdm_symbol_size + fp->nb_prefix_samples);
-        else
-          siglen = (fp->ofdm_symbol_size + fp->nb_prefix_samples0) + (txsymb - 1) * (fp->ofdm_symbol_size + fp->nb_prefix_samples);
+      if (txsymb < start_symbol) {
+        // No DL symbols in this transmission
+        return;
       }
 
-      //+ ru->end_of_burst_delay;
-      flags_burst = TX_BURST_END;
+      int end_symbol = start_symbol + num_symbols - 1;
+      if (end_symbol >= txsymb) {
+        flags_burst = TX_BURST_END;
+      } else {
+        flags_burst = TX_BURST_MIDDLE;
+      }
+
+      int num_symbols_this_transmission = min(txsymb, end_symbol) - start_symbol + 1;
+
+      siglen = get_samples_symbol_duration(fp, slot, start_symbol, num_symbols_this_transmission);
     } else if (slot_type == NR_DOWNLINK_SLOT) {
       int prevslot_type = nr_slot_select(cfg,frame,(slot+(fp->slots_per_frame-1))%fp->slots_per_frame);
       int nextslot_type = nr_slot_select(cfg,frame,(slot+1)%fp->slots_per_frame);
@@ -548,9 +549,11 @@ void tx_rf(RU_t *ru, int frame,int slot, uint64_t timestamp)
       } else {
         flags_burst = proc->first_tx == 1 ? TX_BURST_START : TX_BURST_MIDDLE;
       }
+      siglen = get_samples_symbol_duration(fp, slot, start_symbol, num_symbols);
     }
   } else { // FDD
     flags_burst = proc->first_tx == 1 ? TX_BURST_START : TX_BURST_MIDDLE;
+    siglen = get_samples_symbol_duration(fp, slot, start_symbol, num_symbols);
   }
 
   if (ru->openair0_cfg.gpio_controller != RU_GPIO_CONTROL_NONE)
@@ -561,8 +564,9 @@ void tx_rf(RU_t *ru, int frame,int slot, uint64_t timestamp)
 
   int nt = ru->nb_tx * ru->num_beams_period;
   void *txp[nt];
+  uint32_t time_offset = get_samples_slot_timestamp(fp, slot) + get_samples_symbol_timestamp(fp, slot, start_symbol);
   for (int i = 0; i < nt; i++)
-    txp[i] = (void *)&ru->common.txdata[i][get_samples_slot_timestamp(fp, slot)] - sf_extension * sizeof(int32_t);
+    txp[i] = (void *)&ru->common.txdata[i][time_offset] - sf_extension * sizeof(int32_t);
 
   // prepare tx buffer pointers
   uint32_t txs = ru->rfdevice.trx_write_func(&ru->rfdevice,
@@ -584,6 +588,11 @@ void tx_rf(RU_t *ru, int frame,int slot, uint64_t timestamp)
         siglen + sf_extension,
         txs,
         10 * log10((double)signal_energy(txp[0], siglen + sf_extension)));
+}
+
+void tx_rf(RU_t *ru, int frame, int slot, uint64_t timestamp)
+{
+  tx_rf_symbols(ru, frame, slot, timestamp, 0, 14);
 }
 
 void fill_rf_config(RU_t *ru, char *rf_config_file)
