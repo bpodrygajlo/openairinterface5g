@@ -21,6 +21,8 @@
 #include "nfapi/oai_integration/vendor_ext.h"
 #include <executables/softmodem-common.h>
 #include <executables/thread-common.h>
+#include "nr-oru.h"
+#include "openair1/PHY/INIT/nr_phy_init.h"
 
 pthread_cond_t sync_cond;
 pthread_mutex_t sync_mutex;
@@ -176,6 +178,14 @@ int main(int argc, char **argv)
   init_NR_RU(config_get_if(), NULL);
 
   RU_t *ru = RC.ru[0];
+  ORU_t oru = {0};
+  oru.ru = ru;
+  int ret = get_oru_options(&oru);
+  AssertFatal(ret == 0, "Cannot configure oru, check your config file/cmdline");
+  ru->numerology = oru.numerology;
+  oru_init_frame_parms(&oru);
+  nr_dump_frame_parms(ru->nr_frame_parms);
+
 
   while (oai_exit == 0)
     sleep(1);

@@ -1854,6 +1854,7 @@ add_executable(nr-oru
   ${OPENAIR_DIR}/openair1/SCHED_NR/nr_ru_procedures.c
   ${OPENAIR_DIR}/openair1/SCHED/phy_procedures_lte_common.c
   ${OPENAIR_DIR}/executables/main_nr_ru.c
+  ${OPENAIR_DIR}/executables/nr-oru.c
 )
 target_link_libraries(nr-oru PRIVATE
   UTIL NR_PHY_RU PHY_NR shlib_loader dl
