@@ -1,38 +1,9 @@
-/******************************************************************************
-*
-*   Copyright (c) 2020 Intel.
-*
-*   Licensed under the Apache License, Version 2.0 (the "License");
-*   you may not use this file except in compliance with the License.
-*   You may obtain a copy of the License at
-*
-*       http://www.apache.org/licenses/LICENSE-2.0
-*
-*   Unless required by applicable law or agreed to in writing, software
-*   distributed under the License is distributed on an "AS IS" BASIS,
-*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-*   See the License for the specific language governing permissions and
-*   limitations under the License.
-*
-*******************************************************************************/
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Original file: Copyright 2020 Intel.
+ * Copyright 2026 OpenAirInterface Authors
+ */
 
-/**
- * @brief Definitions and support functions to process XRAN packet
- * @file xran_pkt_up.h
- * @ingroup group_source_xran
- * @author Intel Corporation
- **/
-
-/**
- *****************************************************************************
- * @file xran_pkt_up.h
- *
- * @defgroup xran_up_pkt U-Plane XRAN Packet definitions and functions
- * @ingroup xran
- *
- * @description
- *      Structures relevant to U-plane packets only (data now only)
- *****************************************************************************/
 #ifndef _XRAN_PKT_UP_H_
 #define _XRAN_PKT_UP_H_
 
@@ -65,18 +36,17 @@ extern "C" {
  *       for U-plane as per 6.3.2	DL/UL Data
  *****************************************************************************/
 struct data_section_hdr {
-    union {
-        uint32_t all_bits;
-        struct {
-            uint32_t     num_prbu:8;    /**< 5.4.5.6 number of contiguous PRBs per control section */
-            uint32_t     start_prbu:10; /**< 5.4.5.4 starting PRB of control section */
-            uint32_t     sym_inc:1;     /**< 5.4.5.3 symbol number increment command XRAN_SYMBOLNUMBER_xxxx */
-            uint32_t     rb:1;          /**< 5.4.5.2 resource block indicator, XRAN_RBIND_xxx */
-            uint32_t     sect_id:12;    /**< 5.4.5.1 section identifier */
-        };
-    }fields;
+  union {
+    uint32_t all_bits;
+    struct {
+      uint32_t num_prbu: 8; /**< 5.4.5.6 number of contiguous PRBs per control section */
+      uint32_t start_prbu: 10; /**< 5.4.5.4 starting PRB of control section */
+      uint32_t sym_inc: 1; /**< 5.4.5.3 symbol number increment command XRAN_SYMBOLNUMBER_xxxx */
+      uint32_t rb: 1; /**< 5.4.5.2 resource block indicator, XRAN_RBIND_xxx */
+      uint32_t sect_id: 12; /**< 5.4.5.1 section identifier */
+    };
+  } fields;
 } __rte_packed;
-
 
 /*
  ******************************************************************************
@@ -87,16 +57,15 @@ struct data_section_hdr {
  *       reserved goes always with udCompHdr in u-plane pkt
  *       U-plane as per 6.3.2   DL/UL Data
  *****************************************************************************/
-struct data_section_compression_hdr
-{
-    struct compression_hdr ud_comp_hdr;
-    uint8_t rsrvd; /**< This parameter provides 1 byte for future definition,
-    should be set to all zeros by the sender and ignored by the receiver.
-    This field is only present when udCompHdr is present, and is absent when
-    the static IQ format and compression method is configured via the M-Plane */
+struct data_section_compression_hdr {
+  struct compression_hdr ud_comp_hdr;
+  uint8_t rsrvd; /**< This parameter provides 1 byte for future definition,
+  should be set to all zeros by the sender and ignored by the receiver.
+  This field is only present when udCompHdr is present, and is absent when
+  the static IQ format and compression method is configured via the M-Plane */
 
-    /* TODO: support for Block Floating Point compression */
-    /* udCompMeth  0000b = no compression	absent*/
+  /* TODO: support for Block Floating Point compression */
+  /* udCompMeth  0000b = no compression	absent*/
 };
 
 /*
@@ -108,19 +77,18 @@ struct data_section_compression_hdr
  *       may not be present by udCompMeth in 6.3.3.13
  *****************************************************************************/
 union compression_params {
-    struct block_fl_point {
-        uint8_t exponent:4;
-        uint8_t reserved:4;
-        } blockFlPoint;
-    struct block_scaling {
-        uint8_t sblockScaler;
-        } blockScaling;
-    struct u_law {
-        uint8_t compShift:4;
-        uint8_t compBitWidth:4;
-        } uLaw;
+  struct block_fl_point {
+    uint8_t exponent: 4;
+    uint8_t reserved: 4;
+  } blockFlPoint;
+  struct block_scaling {
+    uint8_t sblockScaler;
+  } blockScaling;
+  struct u_law {
+    uint8_t compShift: 4;
+    uint8_t compBitWidth: 4;
+  } uLaw;
 } __rte_packed;
-
 
 /*
  ******************************************************************************
@@ -132,10 +100,9 @@ union compression_params {
  *       Each bit field size is defined with IQ_BITS macro
  *       Currently supported I and Q sizes are 8 and 16 bits
  *****************************************************************************/
-struct rb_map
-{
-    int16_t i_sample:IQ_BITS; /**< This parameter is the In-phase sample value */
-    int16_t q_sample:IQ_BITS; /**< This parameter is the Quadrature sample value */
+struct rb_map {
+  int16_t i_sample : IQ_BITS; /**< This parameter is the In-phase sample value */
+  int16_t q_sample : IQ_BITS; /**< This parameter is the Quadrature sample value */
 } __rte_packed;
 
 /**
@@ -146,11 +113,10 @@ struct rb_map
  *       Structure holds complete xran u-plane packet header
  *       3.1.1	Ethernet Encapsulation
  *****************************************************************************/
-struct xran_up_pkt_hdr
-{
-    struct xran_ecpri_hdr ecpri_hdr; /**< eCPRI Transport Header */
-    struct radio_app_common_hdr app_hdr; /**< eCPRI Transport Header */
-    struct data_section_hdr data_sec_hdr;
+struct xran_up_pkt_hdr {
+  struct xran_ecpri_hdr ecpri_hdr; /**< eCPRI Transport Header */
+  struct radio_app_common_hdr app_hdr; /**< eCPRI Transport Header */
+  struct data_section_hdr data_sec_hdr;
 } __rte_packed;
 
 /**
@@ -161,12 +127,11 @@ struct xran_up_pkt_hdr
  *       Structure holds complete xran u-plane packet header with compression
  *       3.1.1	Ethernet Encapsulation
  *****************************************************************************/
-struct xran_up_pkt_hdr_comp
-{
-    struct xran_ecpri_hdr ecpri_hdr; /**< eCPRI Transport Header */
-    struct radio_app_common_hdr app_hdr; /**< eCPRI Transport Header */
-    struct data_section_hdr data_sec_hdr; /**< data section Header */
-    struct data_section_compression_hdr data_comp_hdr; /** Compression Header */
+struct xran_up_pkt_hdr_comp {
+  struct xran_ecpri_hdr ecpri_hdr; /**< eCPRI Transport Header */
+  struct radio_app_common_hdr app_hdr; /**< eCPRI Transport Header */
+  struct data_section_hdr data_sec_hdr; /**< data section Header */
+  struct data_section_compression_hdr data_comp_hdr; /** Compression Header */
 } __rte_packed;
 
 /**
@@ -177,18 +142,15 @@ struct xran_up_pkt_hdr_comp
  *       Structure holds complete ethernet and xran u-plane packet header
  *       3.1.1	Ethernet Encapsulation
  *****************************************************************************/
-struct eth_xran_up_pkt_hdr
-{
-    struct rte_ether_hdr eth_hdr;
-    struct xran_up_pkt_hdr xran_hdr;
-}__rte_packed;
+struct eth_xran_up_pkt_hdr {
+  struct rte_ether_hdr eth_hdr;
+  struct xran_up_pkt_hdr xran_hdr;
+} __rte_packed;
 
-struct eth_xran_up_pkt_hdr_comp
-{
-    struct rte_ether_hdr eth_hdr;
-    struct xran_up_pkt_hdr_comp xran_hdr;
-}__rte_packed;
-
+struct eth_xran_up_pkt_hdr_comp {
+  struct rte_ether_hdr eth_hdr;
+  struct xran_up_pkt_hdr_comp xran_hdr;
+} __rte_packed;
 
 #ifdef __cplusplus
 }
