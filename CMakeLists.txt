@@ -2231,6 +2231,11 @@ add_subdirectory(openair3)
 add_subdirectory(radio)
 add_subdirectory(tests)
 
+add_boolean_option(OAI_RU_FRONTHAUL OFF "Whether to configure OAI fronthaul library" OFF)
+if(OAI_RU_FRONTHAUL)
+  add_subdirectory(fronthaul)
+endif()
+
 if(TARGET oai_cuda_lib)
     message(STATUS "CUDA library 'oai_cuda_lib' found, linking to targets...")
     target_link_libraries(nr_dlsim PRIVATE oai_cuda_lib)
