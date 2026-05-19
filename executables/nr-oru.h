@@ -21,6 +21,8 @@
 #ifndef __NR_ORU_H__
 #define __NR_ORU_H__
 #include "openair1/PHY/defs_RU.h"
+#include <pthread.h>
+#include "oru_fh.h"
 
 typedef struct {
   RU_t *ru;
@@ -49,9 +51,14 @@ typedef struct {
   /// number of UL symbols
   int num_UL_symbols;
   int numerology;
+
+  pthread_t north_read_thread;
+  oru_fh_config_t fh_config;
+  void *fronthaul;
 } ORU_t;
 
 int get_oru_options(ORU_t *oru);
 void oru_init_frame_parms(ORU_t *oru);
+void *oru_north_read_thread(void *arg);
 
 #endif

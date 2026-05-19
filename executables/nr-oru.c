@@ -24,19 +24,19 @@
 
 #define CONFIG_SECTION_ORU "ORUs.[0]"
 
-#define CONFIG_STRING_ORU_TX_BW_LIST               "tx_bw"
-#define CONFIG_STRING_ORU_RX_BW_LIST               "rx_bw"
-#define CONFIG_STRING_ORU_CARRIER_TX_LIST          "carrier_tx"
-#define CONFIG_STRING_ORU_CARRIER_RX_LIST          "carrier_rx"
-#define CONFIG_STRING_ORU_FRAME_TYPE               "frame_type"
-#define CONFIG_STRING_ORU_PRACH_CONFIGID           "prach_config_index"
-#define CONFIG_STRING_ORU_PRACH_MSG1FREQ           "prach_msg1_start"
-#define CONFIG_STRING_ORU_NUMEROLOGY               "mu"
-#define CONFIG_STRING_ORU_TDD_PERIOD               "tdd_period"
-#define CONFIG_STRING_ORU_NUM_DL_SLOTS             "num_dl_slots"
-#define CONFIG_STRING_ORU_NUM_UL_SLOTS             "num_ul_slots"
-#define CONFIG_STRING_ORU_NUM_DL_SYMBOLS           "num_dl_symbols"
-#define CONFIG_STRING_ORU_NUM_UL_SYMBOLS           "num_ul_symbols"
+#define CONFIG_STRING_ORU_TX_BW_LIST "tx_bw"
+#define CONFIG_STRING_ORU_RX_BW_LIST "rx_bw"
+#define CONFIG_STRING_ORU_CARRIER_TX_LIST "carrier_tx"
+#define CONFIG_STRING_ORU_CARRIER_RX_LIST "carrier_rx"
+#define CONFIG_STRING_ORU_FRAME_TYPE "frame_type"
+#define CONFIG_STRING_ORU_PRACH_CONFIGID "prach_config_index"
+#define CONFIG_STRING_ORU_PRACH_MSG1FREQ "prach_msg1_start"
+#define CONFIG_STRING_ORU_NUMEROLOGY "mu"
+#define CONFIG_STRING_ORU_TDD_PERIOD "tdd_period"
+#define CONFIG_STRING_ORU_NUM_DL_SLOTS "num_dl_slots"
+#define CONFIG_STRING_ORU_NUM_UL_SLOTS "num_ul_slots"
+#define CONFIG_STRING_ORU_NUM_DL_SYMBOLS "num_dl_symbols"
+#define CONFIG_STRING_ORU_NUM_UL_SYMBOLS "num_ul_symbols"
 
 #define HLP_ORU_TX_BW "set the TX bandwidth list per component carrier"
 #define HLP_ORU_RX_BW "set the RX bandwidth list per component carrier"
@@ -45,13 +45,14 @@
 #define HLP_ORU_FRAMETYPE "set the Frame type TDD/FDD of all component carriers"
 #define HLP_ORU_PRACH_CONFIGID "set the PRACH configuration id of all component carriers"
 #define HLP_ORU_PRACH_MSG1FREQ "set the PRACH MSG1 frequency of all component carriers"
-#define HLP_ORU_NUMEROLOGY     "set the numerology of the RU"
-#define HLP_ORU_TDD_PERIOD     "set the 3GPP TDD periodificty 0-9"
-#define HLP_ORU_NUM_DL_SLOTS   "set the number of DL Slots in TDD"
-#define HLP_ORU_NUM_UL_SLOTS   "set the number of UL Slots in TDD"
+#define HLP_ORU_NUMEROLOGY "set the numerology of the RU"
+#define HLP_ORU_TDD_PERIOD "set the 3GPP TDD periodificty 0-9"
+#define HLP_ORU_NUM_DL_SLOTS "set the number of DL Slots in TDD"
+#define HLP_ORU_NUM_UL_SLOTS "set the number of UL Slots in TDD"
 #define HLP_ORU_NUM_DL_SYMBOLS "set the number of DL symbols in the mixed slot"
 #define HLP_ORU_NUM_UL_SYMBOLS "set the number of UL symbols in the mixed slot"
 
+// clang-format off
 #define CMDLINE_PARAMS_DESC_ORU \
 { \
   {CONFIG_STRING_ORU_TX_BW_LIST,                HLP_ORU_TX_BW,                      0,    .iptr=NULL,       .defintarrayval=DEFBW,        TYPE_INTARRAY,    0}, \
@@ -68,6 +69,39 @@
   {CONFIG_STRING_ORU_NUM_DL_SYMBOLS,            HLP_ORU_NUM_DL_SYMBOLS,             0,    .uptr=NULL,       .defintval=7,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_NUM_UL_SYMBOLS,            HLP_ORU_NUM_UL_SYMBOLS,             0,    .uptr=NULL,       .defintval=3,                 TYPE_UINT,         0}, \
 }
+// clang-format on
+
+#define CONFIG_SECTION_ORU_FH "ORUs.[0].fronthaul"
+
+#define CONFIG_STRING_ORU_DPDK_DEVICES "dpdk_devices"
+#define CONFIG_STRING_RX_CORE "rx_core"
+#define CONFIG_STRING_EXTRA_EAL_ARGS "extra_eal_args"
+#define CONFIG_STRING_DU_MAC_ADDRESSES "du_mac_addr"
+#define CONFIG_STRING_MTU "mtu"
+#define CONFIG_STRING_T2A_UP "T2a_up"
+#define CONFIG_STRING_T2A_CP "T2a_cp"
+#define CONFIG_STRING_PRACH_EAXC_OFFSET "prach_eaxc_offset"
+
+#define HLP_DPDK_DEVICES "DPDK devices to use for the O-RU."
+#define HLP_RX_CORE "The CPU core to be used to deploy dpdk RX worker for O-RU."
+#define HLP_EXTRA_EAL_ARGS "Extra arguments passed to RTE_EAL_INIT."
+#define HLP_DU_MAC_ADDRESSES "DU MAC addreses, used to prepare Ethernet headers."
+#define HLP_MTU "MTU for RX and TX."
+#define HLP_PRACH_EAXC_OFFSET "PRACH eAxC offset."
+
+// clang-format off
+#define CMDLINE_PARAMS_DESC_ORU_FH \
+{ \
+  {CONFIG_STRING_ORU_DPDK_DEVICES,           HLP_DPDK_DEVICES,      PARAMFLAG_MANDATORY,    .strptr=NULL,     .defstrval=NULL,              TYPE_STRINGLIST,   0}, \
+  {CONFIG_STRING_RX_CORE,                    HLP_RX_CORE,           PARAMFLAG_MANDATORY,    .iptr=NULL,       .defintval=-1,                TYPE_INT,          0}, \
+  {CONFIG_STRING_EXTRA_EAL_ARGS,             HLP_EXTRA_EAL_ARGS,    0,                      .strptr=NULL,     .defstrval=NULL,              TYPE_STRINGLIST,   0}, \
+  {CONFIG_STRING_DU_MAC_ADDRESSES,           HLP_DU_MAC_ADDRESSES,  PARAMFLAG_MANDATORY,    .strptr=NULL,     .defstrval=NULL,              TYPE_STRINGLIST,   0}, \
+  {CONFIG_STRING_MTU,                        HLP_MTU,               0,                      .iptr=NULL,       .defintval=9600,              TYPE_INT,          0}, \
+  {CONFIG_STRING_T2A_UP,                     "",                    0,                      .iptr=NULL,       .defintarrayval=NULL,         TYPE_INTARRAY,     0}, \
+  {CONFIG_STRING_T2A_CP,                     "",                    0,                      .iptr=NULL,       .defintarrayval=NULL,         TYPE_INTARRAY,     0}, \
+  {CONFIG_STRING_PRACH_EAXC_OFFSET,          HLP_PRACH_EAXC_OFFSET, 0,                      .iptr=NULL,       .defintval=0,                 TYPE_INT,          0}  \
+}
+// clang-format on
 
 extern void set_scs_parameters(NR_DL_FRAME_PARMS *fp, int mu, int N_RB_DL, int ssb_case);
 
@@ -80,7 +114,7 @@ int get_oru_options(ORU_t *oru)
 
   int ret = config_get(config_get_if(), param, nump, CONFIG_SECTION_ORU);
   if (ret <= 0) {
-    printf("problem reading section \"%s\"\n", CONFIG_SECTION_ORU);
+    LOG_E(NR_PHY, "problem reading section \"%s\"\n", CONFIG_SECTION_ORU);
     return -1;
   }
 
@@ -100,9 +134,67 @@ int get_oru_options(ORU_t *oru)
   oru->num_DL_symbols = *gpd(param, nump, CONFIG_STRING_ORU_NUM_DL_SYMBOLS)->iptr;
   oru->num_UL_symbols = *gpd(param, nump, CONFIG_STRING_ORU_NUM_UL_SYMBOLS)->iptr;
 
+  paramdef_t fh_param[] = CMDLINE_PARAMS_DESC_ORU_FH;
+  nump = sizeofArray(fh_param);
+  oru_fh_config_t *fh_cfg = &oru->fh_config;
+  ret = config_get(config_get_if(), fh_param, nump, CONFIG_SECTION_ORU_FH);
+  if (ret <= 0) {
+    printf("problem reading section \"%s\"\n", CONFIG_SECTION_ORU_FH);
+    return -1;
+  }
+
+  oru_fh_dpdk_config_t *dpdk_conf = &fh_cfg->dpdk_conf;
+  int num_dpdk_devices = gpd(fh_param, nump, CONFIG_STRING_ORU_DPDK_DEVICES)->numelt;
+  dpdk_conf->num_dpdk_devices = num_dpdk_devices;
+  AssertFatal(num_dpdk_devices > 0 && num_dpdk_devices <= 2,
+              "Invalid number of DPDK devices (%d). Configure 1 or 2 devices\n",
+              num_dpdk_devices);
+  for (int i = 0; i < num_dpdk_devices; i++) {
+    dpdk_conf->dpdk_devices[i] = gpd(fh_param, nump, CONFIG_STRING_ORU_DPDK_DEVICES)->strlistptr[i];
+  }
+  dpdk_conf->extra_eal_args = gpd(fh_param, nump, CONFIG_STRING_EXTRA_EAL_ARGS)->strlistptr;
+  dpdk_conf->num_extra_eal_args = gpd(fh_param, nump, CONFIG_STRING_EXTRA_EAL_ARGS)->numelt;
+
+  fh_cfg->num_du_mac_addrs = gpd(fh_param, nump, CONFIG_STRING_DU_MAC_ADDRESSES)->numelt;
+  for (int i = 0; i < fh_cfg->num_du_mac_addrs; i++) {
+    fh_cfg->du_mac_addrs[i] = gpd(fh_param, nump, CONFIG_STRING_DU_MAC_ADDRESSES)->strlistptr[i];
+    AssertFatal(strlen(fh_cfg->du_mac_addrs[i]) == 17, "Invalid MAC address\n");
+  }
+  fh_cfg->enable_compression = false;
+  fh_cfg->rx_core = *gpd(fh_param, nump, CONFIG_STRING_RX_CORE)->iptr;
+  fh_cfg->mtu = *gpd(fh_param, nump, CONFIG_STRING_MTU)->iptr;
+  fh_cfg->num_prbs = oru->bw_tx[0];
+  fh_cfg->numerology = oru->numerology;
+  fh_cfg->prach_eaxc_offset = *gpd(fh_param, nump, CONFIG_STRING_PRACH_EAXC_OFFSET)->iptr;
+
+  AssertFatal(gpd(fh_param, nump, CONFIG_STRING_T2A_UP)->numelt == 2, "Two parameters required for %s\n", CONFIG_STRING_T2A_UP);
+  fh_cfg->T2a_up_min_uS = gpd(fh_param, nump, CONFIG_STRING_T2A_UP)->iptr[0];
+  fh_cfg->T2a_up_max_uS = gpd(fh_param, nump, CONFIG_STRING_T2A_UP)->iptr[1];
+  AssertFatal(fh_cfg->T2a_up_min_uS <= fh_cfg->T2a_up_max_uS,
+              "T2a max (%d) has to be greater than T2a min (%d)\n",
+              fh_cfg->T2a_up_max_uS,
+              fh_cfg->T2a_up_min_uS);
+
+  AssertFatal(gpd(fh_param, nump, CONFIG_STRING_T2A_CP)->numelt == 2, "Two parameters required for %s\n", CONFIG_STRING_T2A_CP);
+  fh_cfg->T2a_cp_min_uS = gpd(fh_param, nump, CONFIG_STRING_T2A_CP)->iptr[0];
+  fh_cfg->T2a_cp_max_uS = gpd(fh_param, nump, CONFIG_STRING_T2A_CP)->iptr[1];
+  AssertFatal(fh_cfg->T2a_cp_min_uS <= fh_cfg->T2a_cp_max_uS,
+              "T2a max (%d) has to be greater than T2a min (%d)\n",
+              fh_cfg->T2a_cp_max_uS,
+              fh_cfg->T2a_cp_min_uS);
+
+  oru_fh_tdd_pattern_t *tdd_pattern = &fh_cfg->tdd_pattern;
+  tdd_pattern->num_dl_slots = oru->num_DL_slots;
+  tdd_pattern->num_ul_slots = oru->num_UL_slots;
+  tdd_pattern->num_dl_symbols = oru->num_DL_symbols;
+  tdd_pattern->num_ul_symbols = oru->num_UL_symbols;
+  int num_slots_frame = (1 << oru->numerology) * NR_NUMBER_OF_SUBFRAMES_PER_FRAME;
+  int num_period_frame = get_nb_periods_per_frame(oru->tdd_period);
+  int num_slots_period = num_slots_frame / num_period_frame;
+  tdd_pattern->tdd_pattern_length_slots = num_slots_period;
+
   return 0;
 }
-
 
 void oru_init_frame_parms(ORU_t *oru)
 {
@@ -164,14 +256,12 @@ void oru_init_frame_parms(ORU_t *oru)
       int p = n % numb_slots_period;
       if (p < oru->num_DL_slots) {
         ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list =
-            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list)
-                   * NR_SYMBOLS_PER_SLOT);
+            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
         for (s = 0; s < 14; s++)
           ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 0;
       } else if (p == oru->num_DL_slots) {
         ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list =
-            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list)
-                   * NR_SYMBOLS_PER_SLOT);
+            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
         for (s = 0; s < oru->num_DL_symbols; s++)
           ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 0;
         for (; s < NR_SYMBOLS_PER_SLOT - oru->num_UL_symbols; s++)
@@ -180,11 +270,36 @@ void oru_init_frame_parms(ORU_t *oru)
           ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 1;
       } else {
         ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list =
-            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list)
-                   * NR_SYMBOLS_PER_SLOT);
+            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
         for (s = 0; s < NR_SYMBOLS_PER_SLOT; s++)
           ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 1;
       }
     }
   }
+}
+
+void *oru_north_read_thread(void *arg)
+{
+  ORU_t *oru = (ORU_t *)arg;
+
+  RU_t *ru = (RU_t *)oru->ru;
+  NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
+
+  __attribute__((aligned(32))) c16_t txDataF[ru->nb_tx][fp->ofdm_symbol_size * 14];
+  c16_t *txDataF_ptr[ru->nb_tx];
+  for (int aatx = 0; aatx < ru->nb_tx; aatx++) {
+    txDataF_ptr[aatx] = txDataF[aatx];
+  }
+  while (!oai_exit) {
+    int frame = -1, slot = -1, symbol = -1;
+    int ret = oru_fh_tx_read_symbol(oru->fronthaul, (uint32_t **)txDataF_ptr, ru->nb_tx, &frame, &slot, &symbol);
+    if (ret != 0) {
+      LOG_E(PHY, "[RU_thread] read data error: frame %d, slot %d, symbol %d\n", frame, slot, symbol);
+      continue;
+    }
+    if (frame % 256 == 0 && slot == 0 && symbol == 0) {
+      LOG_I(PHY, "[RU_thread] read data: frame %d, slot %d, symbol %d\n", frame, slot, symbol);
+    }
+  }
+  return NULL;
 }
