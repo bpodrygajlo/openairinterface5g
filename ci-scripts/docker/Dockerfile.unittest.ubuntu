@@ -16,7 +16,8 @@ RUN apt-get update && \
         libyaml-cpp-dev \
         libzmq3-dev \
         dpdk-dev \
-        dpdk
+        dpdk \
+        curl
 
 RUN rm -Rf /oai-ran
 WORKDIR /oai-ran
