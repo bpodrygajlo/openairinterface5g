@@ -32,3 +32,10 @@ add_test(NAME test_oru_pcap_frag COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_oru_pca
 set_property(TEST test_oru_pcap_frag PROPERTY LABELS fronthaul)
 
 add_dependencies(tests test_oru_pcap)
+
+add_executable(test_oru_fh test_oru_fh.c)
+target_link_libraries(test_oru_fh PRIVATE oru_fh xran_pkt ${dpdk_LIBRARIES})
+target_include_directories(test_oru_fh PRIVATE ${dpdk_INCLUDE_DIRS})
+add_dependencies(tests test_oru_fh)
+add_test(NAME test_oru_fh COMMAND test_oru_fh ${DPDK_TEST_ARGS} "--file-prefix=test_oru_fh" "--vdev=net_null0" "--vdev=net_null1")
+set_property(TEST test_oru_fh PROPERTY LABELS fronthaul)
