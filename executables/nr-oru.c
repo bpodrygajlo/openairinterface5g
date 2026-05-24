@@ -21,6 +21,10 @@
 #include "common/config/config_userapi.h"
 #include "nr-oru.h"
 #include "openair1/PHY/defs_nr_common.h"
+#include <time.h>
+#include "openair1/PHY/MODULATION/nr_modulation.h"
+#include "openair1/SCHED_NR/sched_nr.h"
+#include "openair1/PHY/MODULATION/modulation_common.h"
 
 #define CONFIG_SECTION_ORU "ORUs.[0]"
 
@@ -104,6 +108,7 @@
 // clang-format on
 
 extern void set_scs_parameters(NR_DL_FRAME_PARMS *fp, int mu, int N_RB_DL, int ssb_case);
+void tx_rf_symbols(RU_t *ru, int frame, int slot, uint64_t timestamp, int start_symbol, int num_symbols);
 
 int get_oru_options(ORU_t *oru)
 {
@@ -278,6 +283,53 @@ void oru_init_frame_parms(ORU_t *oru)
   }
 }
 
+void fft_and_cp_insertion(NR_DL_FRAME_PARMS *fp, c16_t *txdataF, c16_t *txdata, int slot, int symbol)
+{
+  if (fp->Ncp == 1) {
+    PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples, CYCLIC_PREFIX);
+  } else {
+    if (fp->numerology_index != 0) {
+      if (!(slot % (fp->slots_per_subframe / 2)) && (symbol == 0)) {
+        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples0, CYCLIC_PREFIX);
+      } else {
+        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples, CYCLIC_PREFIX);
+      }
+    } else {
+      if (symbol % 0x7) {
+        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples, CYCLIC_PREFIX);
+      } else {
+        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples0, CYCLIC_PREFIX);
+      }
+    }
+  }
+}
+
+static void dl_symbol_process(RU_t *ru, int frame, int slot, int symbol, c16_t **txDataF, int64_t timestamp)
+{
+  NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
+  uint32_t slot_offset = get_samples_slot_timestamp(fp, slot);
+  uint32_t symbol_offset = get_samples_symbol_timestamp(fp, slot, symbol);
+
+  __attribute__((aligned(64))) c16_t txdataF_shifted[fp->ofdm_symbol_size];
+  memset(txdataF_shifted, 0, sizeof(txdataF_shifted));
+  c16_t *rotation = fp->symbol_rotation[0] + (slot % fp->slots_per_subframe) * fp->symbols_per_slot + symbol;
+  for (int aatx = 0; aatx < ru->nb_tx; aatx++) {
+    // Phase compensation
+    rotate_cpx_vector(txDataF[aatx], rotation, txDataF[aatx], fp->N_RB_DL * NR_NB_SC_PER_RB, 15);
+    // FFT Shift
+    const int num_samp_half = fp->N_RB_DL * NR_NB_SC_PER_RB / 2;
+    const int first_carrier_offset = fp->ofdm_symbol_size - num_samp_half;
+    memcpy(txdataF_shifted + first_carrier_offset, txDataF[aatx], num_samp_half * sizeof(c16_t));
+    memcpy(txdataF_shifted, txDataF[aatx] + num_samp_half, num_samp_half * sizeof(c16_t));
+    fft_and_cp_insertion(ru->nr_frame_parms,
+                         txdataF_shifted,
+                         (c16_t *)&ru->common.txdata[aatx][slot_offset + symbol_offset],
+                         slot,
+                         symbol);
+  }
+  tx_rf_symbols(ru, frame, slot, timestamp, symbol, 1);
+}
+
 void *oru_north_read_thread(void *arg)
 {
   ORU_t *oru = (ORU_t *)arg;
@@ -285,11 +337,24 @@ void *oru_north_read_thread(void *arg)
   RU_t *ru = (RU_t *)oru->ru;
   NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
 
-  __attribute__((aligned(32))) c16_t txDataF[ru->nb_tx][fp->ofdm_symbol_size * 14];
+  __attribute__((aligned(64))) c16_t txDataF[ru->nb_tx][fp->N_RB_DL * NR_NB_SC_PER_RB];
+  memset(txDataF, 0, sizeof(txDataF));
   c16_t *txDataF_ptr[ru->nb_tx];
   for (int aatx = 0; aatx < ru->nb_tx; aatx++) {
     txDataF_ptr[aatx] = txDataF[aatx];
   }
+  uint32_t start_frame, start_slot;
+  struct timespec utc_anchor_point;
+  oru_fh_get_utc_anchor_point(oru->fronthaul, &start_frame, &start_slot, &utc_anchor_point);
+  AssertFatal(ru->rfdevice.get_timestamp != NULL, "rfdevice has no capability to translate UTC timestamp to sample index\n");
+  int64_t start_timestamp = ru->rfdevice.get_timestamp(&ru->rfdevice, &utc_anchor_point);
+  // subtract the start_frame and start_slot from the timestamp simplify calculation below.
+  start_timestamp -= (start_frame * fp->samples_per_frame + get_samples_slot_timestamp(fp, start_slot));
+  // Now start_timestamp points to the start sample of the frame 0 slot 0 symbol 0 of hyperframe 0
+  uint64_t hyper_frame_number = 0;
+  uint32_t last_frame = 0;
+  LOG_A(PHY, "DL thread started: start_timestamp %ld, start_frame %d, start_slot %d\n", start_timestamp, start_frame, start_slot);
+
   while (!oai_exit) {
     int frame = -1, slot = -1, symbol = -1;
     int ret = oru_fh_tx_read_symbol(oru->fronthaul, (uint32_t **)txDataF_ptr, ru->nb_tx, &frame, &slot, &symbol);
@@ -297,6 +362,21 @@ void *oru_north_read_thread(void *arg)
       LOG_E(PHY, "[RU_thread] read data error: frame %d, slot %d, symbol %d\n", frame, slot, symbol);
       continue;
     }
+    if (last_frame + 1 != frame) {
+      if (frame == 0) {
+        hyper_frame_number++;
+      } else if (last_frame != frame ) {
+        LOG_E(PHY, "Received frames out of order, last_frame %d, frame %d\n", last_frame, frame);
+      }
+    }
+    last_frame = frame;
+    uint64_t num_frames = hyper_frame_number * 1024 + frame;
+    int64_t timestamp = start_timestamp + num_frames * fp->samples_per_frame + get_samples_slot_timestamp(fp, slot)
+                        + get_samples_symbol_timestamp(fp, slot, symbol);
+    if (timestamp < 0) {
+      continue;
+    }
+    dl_symbol_process(ru, frame, slot, symbol, txDataF_ptr, timestamp);
     if (frame % 256 == 0 && slot == 0 && symbol == 0) {
       LOG_I(PHY, "[RU_thread] read data: frame %d, slot %d, symbol %d\n", frame, slot, symbol);
     }
