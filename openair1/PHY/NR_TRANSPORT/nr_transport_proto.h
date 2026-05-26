@@ -178,6 +178,13 @@ typedef struct rx_prach_out {
 rx_prach_out_t rx_nr_prach(const prach_item_t *, int occasion);
 
 void rx_nr_prach_ru(prach_item_t *, int32_t **, NR_DL_FRAME_PARMS *frame_parms, int N_TA_offset);
+void rx_nr_prach_ru_rep(prach_item_t *p,
+                        int32_t **rxdata,
+                        NR_DL_FRAME_PARMS *fp,
+                        int N_TA_offset,
+                        int rep,
+                        int prachOccasion,
+                        c16_t (*rxsigF)[NR_PRACH_SEQ_LEN_L]);
 
 void nr_fill_pucch(PHY_VARS_gNB *gNB,
                    int frame,
@@ -213,6 +220,7 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
                           int16_t *timing_advance_offset_nsec);
 
 int get_nr_prach_duration(uint8_t prach_format);
+int get_nr_prach_nrep(uint8_t format);
 
 void init_nr_prach(PHY_VARS_gNB *gNB);
 void reset_nr_prach(PHY_VARS_gNB *gNB);

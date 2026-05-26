@@ -194,6 +194,24 @@ int main(int argc, char **argv)
   fill_rf_config(ru, ru->rf_config_file);
   ru->N_TA_offset = set_default_nta_offset(fp->freq_range, fp->samples_per_subframe);
 
+  /* set PRACH configuration */
+  nfapi_nr_prach_config_t *prach_config = &ru->config.prach_config;
+  prach_config->prach_ConfigurationIndex.value = oru.prach_config_index;
+  prach_config->num_prach_fd_occasions_list[0].k1.value = oru.prach_msg1_freq;
+  prach_config->prach_sequence_length.value = 1;
+  prach_config->prach_sub_c_spacing.value = 1;
+  prach_config->num_prach_fd_occasions.value = 1;
+
+  reset_meas(&oru.rx_prach);
+  oru.prach_info = get_nr_prach_occasion_info_from_index(oru.prach_config_index, FR1, fp->frame_type);
+  LOG_A(PHY, "PRACH configuration index %d\n", oru.prach_config_index);
+  LOG_A(PHY,
+        "PRACH format %d start_symbol %d duration %d\n",
+        oru.prach_info.format,
+        oru.prach_info.start_symbol,
+        oru.prach_info.N_dur);
+  prepare_prach_item(&oru);
+
   oru.fronthaul = oru_fh_init(&oru.fh_config);
   AssertFatal(oru.fronthaul != NULL, "Cannot configure oru fronthaul, check your config file/cmdline");
 

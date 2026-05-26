@@ -15,6 +15,10 @@ typedef struct {
 
 typedef struct {
   uint64_t total_cplane;
+  uint64_t cplane_received_dl;
+  uint64_t cplane_received_ul;
+  uint64_t cplane_received_prach;
+  uint64_t cplane_received_other;
   uint64_t total_uplane_received;
   uint64_t total_uplane_sent;
   uint64_t cplane_err_hdr; // apphdr or section extraction
@@ -22,6 +26,9 @@ typedef struct {
   uint64_t cplane_err_early;
   uint64_t cplane_err_late;
   uint64_t cplane_err_dup; // duplicate cplane
+  uint64_t cplane_err_dup_dl;
+  uint64_t cplane_err_dup_ul;
+  uint64_t cplane_err_dup_prach;
   uint64_t uplane_err_late;
   uint64_t uplane_err_early;
   uint64_t uplane_err_dup;
@@ -31,6 +38,13 @@ typedef struct {
   uint64_t ul_tdd_mismatch;
   uint64_t out_of_mbufs;
   uint64_t ul_cplane_missing;
+  uint64_t prach_cplane_missing;
+  uint64_t prach_cplane_missing_ant;
+  uint64_t prach_cplane_missing_inactive;
+  uint64_t prach_cplane_missing_stale;
+  uint64_t prach_cplane_missing_early;
+  uint64_t prach_out_of_mbufs;
+  uint64_t prach_jobs_pool_exhausted;
   txrx_histogram_t dl_uplane_hist;
   txrx_histogram_t dl_cplane_hist;
   txrx_histogram_t ul_cplane_hist;

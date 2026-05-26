@@ -21,6 +21,12 @@ int get_nr_prach_duration(uint8_t prach_format)
   return val[prach_format];
 }
 
+int get_nr_prach_nrep(uint8_t format) {
+  int reps[] =  {1, 2, 4, 4, 2, 4, 6, 2, 12, 1, 4};
+  AssertFatal(format < sizeofArray(reps), "Invalid Prach format %d\n", format);
+  return reps[format];
+}
+
 void L1_nr_prach_procedures(PHY_VARS_gNB *gNB, prach_item_t *prach_id, nfapi_nr_rach_indication_t *rach_ind)
 {
   const frame_t frame = prach_id->frame;
