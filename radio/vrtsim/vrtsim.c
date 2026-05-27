@@ -768,7 +768,6 @@ static int vrtsim_write(openair0_device_t *device,
     }
     return nsamps;
   } else {
-    AssertFatal(nbAnt == 1, "Multi-TX gNB not yet supported in multi-UE no-chanmod mode\n");
     for (int u = 0; u < vrtsim_state->num_ues; u++) {
       int rx_offset = vrtsim_state->ue_conf[u].rx_offset;
       int num_rx_ant = vrtsim_state->ue_conf[u].rx_ant;
