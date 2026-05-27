@@ -74,23 +74,25 @@ int oru_fh_get_ready_jobs(void *handle);
  * @param handle Pointer to the fronthaul handle.
  * @param txdataF Array of pointers to buffers to store the received frequency-domain IQ samples (per TX antenna).
  * @param nb_tx Number of TX antennas.
+ * @param hyper_frame Absolute GPS hyper-frame number
  * @param frame Pointer to store the frame number of the read symbol.
  * @param slot Pointer to store the slot number of the read symbol.
  * @param symbol Pointer to store the symbol number.
  * @return 0 on success or -1 on failure
  */
-int oru_fh_tx_read_symbol(void *handle, uint32_t **txdataF, int nb_tx, int *frame, int *slot, int *symbol);
+int oru_fh_tx_read_symbol(void *handle, uint32_t **txdataF, int nb_tx, uint64_t *hyper_frame, int *frame, int *slot, int *symbol);
 
 /**
  * @brief Get the UTC anchor point mapping between 5G time and system time.
  *
  * @param handle Pointer to the fronthaul handle.
  * @param frame Pointer to store the reference frame number.
+ * @param hyper_frame Pointer to store the reference hyperframe number (1024 frames each)
  * @param slot Pointer to store the reference slot number.
  * @param ts Pointer to a timespec structure to store the corresponding system time.
  * @return 0 on success, negative on error.
  */
-int oru_fh_get_utc_anchor_point(void *handle, uint32_t* frame, uint32_t* slot, struct timespec *ts);
+int oru_fh_get_utc_anchor_point(void *handle, uint64_t *hyper_frame, uint32_t* frame, uint32_t* slot, struct timespec *ts);
 
 /**
  * @brief Send PRACH symbol data (U-Plane) over the Fronthaul interface.

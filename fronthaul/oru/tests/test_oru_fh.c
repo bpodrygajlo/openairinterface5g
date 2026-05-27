@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include "common/config/config_userapi.h"
 #include <rte_eal.h>
+#include <assert.h>
 
 // OAI Linkage Satisfiers
 void exit_function(const char *file, const char *function, const int line, const char *s, const int assertflag)
@@ -84,6 +85,20 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  // Testing UTC Anchor Point and Hyper-frame
+  printf("Testing UTC Anchor Point and Hyper-frame...\n");
+  uint64_t hf;
+  uint32_t f, s;
+  struct timespec ts;
+  if (oru_fh_get_utc_anchor_point(handle, &hf, &f, &s, &ts) < 0) {
+    fprintf(stderr, "FAIL: oru_fh_get_utc_anchor_point failed\n");
+    oru_fh_cleanup(handle);
+    return 1;
+  }
+  printf("UTC Anchor Point: hf=%lu, f=%u, s=%u, ts=%ld.%09ld\n", hf, f, s, ts.tv_sec, ts.tv_nsec);
+  assert(f < 1024);
+  assert(s < (10 << cfg.numerology));
+
   printf("Running live loop for 2 seconds...\n");
   uint32_t *txData[1];
   txData[0] = malloc(273 * 12 * sizeof(uint32_t));
@@ -96,8 +111,9 @@ int main(int argc, char **argv)
     uint64_t target_cycles = start_cycles + (rte_get_timer_hz() / 1000);
     while (rte_get_timer_cycles() < target_cycles) {
       int f, s, sym;
+      uint64_t hf;
       while (oru_fh_get_ready_jobs(handle) > 0) {
-        oru_fh_tx_read_symbol(handle, txData, 1, &f, &s, &sym);
+        oru_fh_tx_read_symbol(handle, txData, 1, &hf, &f, &s, &sym);
       }
     }
   }

@@ -735,7 +735,7 @@ static void unpack_iq(c16_t *txdataF, void *iqdata, int start_prb, int num_prb)
   }
 }
 
-void read_dl_iq(void *context, uint32_t **txdataF, int nb_tx, int *frame, int *slot, int *symbol)
+void read_dl_iq(void *context, uint32_t **txdataF, int nb_tx, uint64_t *hyper_frame, int *frame, int *slot, int *symbol)
 {
   oru_packet_processor_context_t *ctx = (oru_packet_processor_context_t *)context;
   if (ctx == NULL)
@@ -750,6 +750,7 @@ void read_dl_iq(void *context, uint32_t **txdataF, int nb_tx, int *frame, int *s
   uint64_t absolute_gps_symbol = job->absolute_symbol;
   int numerology = ctx->numerology;
   int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << numerology) * NR_SYMBOLS_PER_SLOT;
+  *hyper_frame = (absolute_gps_symbol / num_symbols_per_frame) / 1024;
   *frame = (absolute_gps_symbol / num_symbols_per_frame) % 1024;
   *slot = (absolute_gps_symbol % num_symbols_per_frame) / NR_SYMBOLS_PER_SLOT;
   *symbol = absolute_gps_symbol % NR_SYMBOLS_PER_SLOT;

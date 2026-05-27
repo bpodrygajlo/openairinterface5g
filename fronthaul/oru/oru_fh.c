@@ -223,12 +223,12 @@ void oru_fh_cleanup(void *handle)
   free(fh);
 }
 
-int oru_fh_tx_read_symbol(void *handle, uint32_t **txdataF, int nb_tx, int *frame, int *slot, int *symbol)
+int oru_fh_tx_read_symbol(void *handle, uint32_t **txdataF, int nb_tx, uint64_t *hyper_frame, int *frame, int *slot, int *symbol)
 {
   if (!handle)
     return -1;
   oru_fh_t *fh = (oru_fh_t *)handle;
-  read_dl_iq(fh->packet_processor, txdataF, nb_tx, frame, slot, symbol);
+  read_dl_iq(fh->packet_processor, txdataF, nb_tx, hyper_frame, frame, slot, symbol);
   return 0;
 }
 
@@ -240,7 +240,7 @@ int oru_fh_get_ready_jobs(void *handle)
   return get_ready_job_count(fh->packet_processor);
 }
 
-int oru_fh_get_utc_anchor_point(void *handle, uint32_t *frame, uint32_t *slot, struct timespec *ts)
+int oru_fh_get_utc_anchor_point(void *handle, uint64_t *hyper_frame, uint32_t *frame, uint32_t *slot, struct timespec *ts)
 {
   if (!handle || !frame || !slot || !ts)
     return -1;
@@ -249,6 +249,7 @@ int oru_fh_get_utc_anchor_point(void *handle, uint32_t *frame, uint32_t *slot, s
   absolute_gps_symbol -= absolute_gps_symbol % NR_SYMBOLS_PER_SLOT; // Round down to start of current slot
   uint64_t absolute_slot = absolute_gps_symbol / NR_SYMBOLS_PER_SLOT;
   uint32_t slots_per_frame = 10 << fh->cfg.numerology;
+  *hyper_frame = (absolute_slot / slots_per_frame) / 1024;
   *frame = (absolute_slot / slots_per_frame) % 1024;
   *slot = absolute_slot % slots_per_frame;
 

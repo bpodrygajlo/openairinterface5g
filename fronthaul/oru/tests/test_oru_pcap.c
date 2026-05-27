@@ -205,8 +205,9 @@ int main(int argc, char *argv[])
 
             // Drain ready jobs to prevent ring overflow
             int f, sl, sy;
+            uint64_t hf;
             while (get_ready_job_count(ctx) > 0) {
-              read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &f, &sl, &sy);
+              read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &hf, &f, &sl, &sy);
             }
           }
           last_tick_sym = current_sym;
@@ -238,8 +239,9 @@ int main(int argc, char *argv[])
 
     // Drain ready jobs to prevent ring overflow during flush
     int f, sl, sy;
+    uint64_t hf;
     while (get_ready_job_count(ctx) > 0) {
-      read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &f, &sl, &sy);
+      read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &hf, &f, &sl, &sy);
     }
   }
 

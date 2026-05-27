@@ -344,33 +344,28 @@ void *oru_north_read_thread(void *arg)
     txDataF_ptr[aatx] = txDataF[aatx];
   }
   uint32_t start_frame, start_slot;
+  uint64_t start_hyper_frame;
   struct timespec utc_anchor_point;
-  oru_fh_get_utc_anchor_point(oru->fronthaul, &start_frame, &start_slot, &utc_anchor_point);
+  oru_fh_get_utc_anchor_point(oru->fronthaul, &start_hyper_frame, &start_frame, &start_slot, &utc_anchor_point);
   AssertFatal(ru->rfdevice.get_timestamp != NULL, "rfdevice has no capability to translate UTC timestamp to sample index\n");
   int64_t start_timestamp = ru->rfdevice.get_timestamp(&ru->rfdevice, &utc_anchor_point);
   // subtract the start_frame and start_slot from the timestamp simplify calculation below.
   start_timestamp -= (start_frame * fp->samples_per_frame + get_samples_slot_timestamp(fp, start_slot));
   // Now start_timestamp points to the start sample of the frame 0 slot 0 symbol 0 of hyperframe 0
-  uint64_t hyper_frame_number = 0;
-  uint32_t last_frame = 0;
   LOG_A(PHY, "DL thread started: start_timestamp %ld, start_frame %d, start_slot %d\n", start_timestamp, start_frame, start_slot);
 
   while (!oai_exit) {
     int frame = -1, slot = -1, symbol = -1;
-    int ret = oru_fh_tx_read_symbol(oru->fronthaul, (uint32_t **)txDataF_ptr, ru->nb_tx, &frame, &slot, &symbol);
+    uint64_t hyper_frame;
+    int ret = oru_fh_tx_read_symbol(oru->fronthaul, (uint32_t **)txDataF_ptr, ru->nb_tx, &hyper_frame, &frame, &slot, &symbol);
     if (ret != 0) {
       LOG_E(PHY, "[RU_thread] read data error: frame %d, slot %d, symbol %d\n", frame, slot, symbol);
       continue;
     }
-    if (last_frame + 1 != frame) {
-      if (frame == 0) {
-        hyper_frame_number++;
-      } else if (last_frame != frame ) {
-        LOG_E(PHY, "Received frames out of order, last_frame %d, frame %d\n", last_frame, frame);
-      }
+    if (start_hyper_frame > hyper_frame) {
+      continue;
     }
-    last_frame = frame;
-    uint64_t num_frames = hyper_frame_number * 1024 + frame;
+    uint64_t num_frames = (hyper_frame - start_hyper_frame) * 1024 + frame;
     int64_t timestamp = start_timestamp + num_frames * fp->samples_per_frame + get_samples_slot_timestamp(fp, slot)
                         + get_samples_symbol_timestamp(fp, slot, symbol);
     if (timestamp < 0) {
