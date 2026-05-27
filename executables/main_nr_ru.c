@@ -130,6 +130,12 @@ void nr_fill_du(uint16_t N_ZC, const uint16_t *prach_root_sequence_map, uint16_t
 {
   return;
 };
+
+static void sig_handler(int sig_num)
+{
+  oai_exit = 1;
+}
+
 uint16_t nr_du[838];
 
 uint64_t downlink_frequency[MAX_NUM_CCs][4];
@@ -202,25 +208,30 @@ int main(int argc, char **argv)
   usleep(1000);
   oru_fh_start(oru.fronthaul);
 
+  // Signal handler
+  signal(SIGINT, sig_handler);
+
   while (oai_exit == 0) {
     oru_fh_print_stats(oru.fronthaul);
     sleep(1);
   }
-  // stop threads
 
-  kill_NR_RU_proc(0);
+  pthread_join(oru.north_read_thread, NULL);
+  pthread_join(oru.south_read_thread, NULL);
 
-  end_configmodule(uniqCfg);
+  oru_fh_stop(oru.fronthaul);
+
+  if (ru->rfdevice.trx_stop_func) {
+    ru->rfdevice.trx_stop_func(&ru->rfdevice);
+    ru->rfdevice.trx_stop_func = NULL;
+  }
 
   if (ru->rfdevice.trx_end_func) {
     ru->rfdevice.trx_end_func(&ru->rfdevice);
     ru->rfdevice.trx_end_func = NULL;
   }
 
-  if (ru->ifdevice.trx_end_func) {
-    ru->ifdevice.trx_end_func(&ru->ifdevice);
-    ru->ifdevice.trx_end_func = NULL;
-  }
+  end_configmodule(uniqCfg);
 
   logClean();
   printf("Bye.\n");
