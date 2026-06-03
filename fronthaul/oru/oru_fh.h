@@ -7,6 +7,7 @@
 
 #include "oru_io.h"
 #include <stdint.h>
+#include "oru_packet_processor.h"
 
 typedef struct {
   char *dpdk_devices[MAX_RU_PORTS];
@@ -107,16 +108,24 @@ int oru_fh_get_utc_anchor_point(void *handle, uint64_t *hyper_frame, uint32_t* f
 void oru_fh_rx_send_prach(void *handle, uint32_t **prachF, int nb_rx, int frame, int slot, int symbol);
 
 /**
+ * @brief Poll for pending UL jobs
+ *
+ * @param handle Pointer to the fronthaul handle.
+ * @param job Job descriptor
+ *
+ * @returns 0 if successful, -1 otherwise
+ */
+int oru_fh_poll_ul_job(void *handle, ul_job_t *job);
+
+/**
  * @brief Send PUSCH symbol data (U-Plane) over the Fronthaul interface.
  *
  * @param handle Pointer to the fronthaul handle.
  * @param puschF Array of pointers to buffers containing the frequency-domain PUSCH IQ samples.
- * @param nb_rx Number of RX antennas.
- * @param frame Target frame number.
- * @param slot Target slot number.
- * @param symbol Target symbol number.
+ * @param symbol Absolute symbol index within slot (0–13); must be within the job's symbol range
+ * @param job Job descriptor
  */
-void oru_fh_rx_send_pusch(void *handle, uint32_t **puschF, int nb_rx, int frame, int slot, int symbol);
+void oru_fh_rx_send_pusch(void *handle, uint32_t *puschF, int symbol, const ul_job_t *job);
 
 /**
  * @brief Start the O-RU Fronthaul processing threads and loops.

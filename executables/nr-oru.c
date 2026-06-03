@@ -19,9 +19,11 @@
  *      contact@openairinterface.org
  */
 #include "common/config/config_userapi.h"
+#include "common/utils/system.h"
 #include "nr-oru.h"
 #include "openair1/PHY/defs_nr_common.h"
 #include "PHY/NR_TRANSPORT/nr_transport_proto.h"
+#include "oru_packet_processor.h"
 #include <time.h>
 #include "openair1/PHY/MODULATION/nr_modulation.h"
 #include "openair1/SCHED_NR/sched_nr.h"
@@ -506,6 +508,101 @@ void receive_prach(ORU_t *oru, int frame, int slot, int symbol, int prach_symbol
   oru_fh_rx_send_prach(oru->fronthaul, (uint32_t **)rxdataF_ptr, ru->nb_rx, frame, slot, symbol);
 }
 
+#define MAX_PENDING_UL_JOBS 64
+
+typedef struct {
+  ul_job_t job;
+  bool active;
+  int symbols_sent;
+} ul_pending_t;
+
+static void receive_pusch(ORU_t *oru, int frame, int slot, int symbol, ul_job_t *job)
+{
+  RU_t *ru = oru->ru;
+  NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
+  int aarx = job->antenna_id;
+
+  if (aarx < 0 || aarx >= fp->nb_antennas_rx) {
+    LOG_W(PHY, "[ORU south] receive_pusch: invalid antenna_id %d\n", aarx);
+    return;
+  }
+
+  // CP removal + FFT → full ofdm_symbol_size frequency-domain output
+  c16_t rxdataF_fft[fp->ofdm_symbol_size] __attribute__((aligned(32)));
+  nr_symbol_fep_ul(fp, (c16_t *)ru->common.rxdata[aarx], rxdataF_fft, symbol, slot, ru->N_TA_offset);
+
+  // Phase decompensation (conjugate rotation for UL)
+  apply_nr_rotation_symbol_RX(fp, rxdataF_fft, fp->symbol_rotation[link_type_ul], fp->N_RB_UL, slot, symbol);
+
+  // Inverse FFT shift: split format → contiguous PRB format sent to DU.
+  // DL TX shift:   contiguous[0..N/2-1]   → FFT_input[first_carrier_offset..]  (negative freqs)
+  //                contiguous[N/2..N-1]   → FFT_input[0..N/2-1]               (positive freqs)
+  // UL RX inverse: FFT_out[first_carrier_offset..] → contiguous[0..N/2-1]
+  //                FFT_out[0..N/2-1]              → contiguous[N/2..N-1]
+  const int num_samp_half = fp->N_RB_UL * NR_NB_SC_PER_RB / 2;
+  const int first_carrier_offset = fp->ofdm_symbol_size - num_samp_half;
+  c16_t rxdataF[fp->N_RB_UL * NR_NB_SC_PER_RB];
+  memcpy(rxdataF, rxdataF_fft + first_carrier_offset, num_samp_half * sizeof(c16_t));
+  memcpy(rxdataF + num_samp_half, rxdataF_fft, num_samp_half * sizeof(c16_t));
+
+  oru_fh_rx_send_pusch(oru->fronthaul, (uint32_t *)rxdataF, symbol, job);
+}
+
+#define UL_WORK_QUEUE_DEPTH 128
+
+typedef struct {
+  ORU_t *oru;
+  int frame;
+  int slot;
+  int symbol;
+  ul_job_t job;
+} ul_work_item_t;
+
+typedef struct {
+  ul_work_item_t ring[UL_WORK_QUEUE_DEPTH];
+  int head;
+  int tail;
+  int count;
+  pthread_mutex_t lock;
+  pthread_cond_t work_available;
+  pthread_cond_t space_available;
+  bool running;
+} ul_work_queue_t;
+
+static void *ul_worker_thread(void *arg)
+{
+  ul_work_queue_t *q = arg;
+  while (1) {
+    pthread_mutex_lock(&q->lock);
+    while (q->count == 0 && q->running)
+      pthread_cond_wait(&q->work_available, &q->lock);
+    if (!q->running && q->count == 0) {
+      pthread_mutex_unlock(&q->lock);
+      break;
+    }
+    ul_work_item_t item = q->ring[q->head];
+    q->head = (q->head + 1) % UL_WORK_QUEUE_DEPTH;
+    q->count--;
+    pthread_cond_signal(&q->space_available);
+    pthread_mutex_unlock(&q->lock);
+
+    receive_pusch(item.oru, item.frame, item.slot, item.symbol, &item.job);
+  }
+  return NULL;
+}
+
+static void dispatch_ul_work(ul_work_queue_t *q, ORU_t *oru, int frame, int slot, int symbol, const ul_job_t *job)
+{
+  pthread_mutex_lock(&q->lock);
+  while (q->count == UL_WORK_QUEUE_DEPTH)
+    pthread_cond_wait(&q->space_available, &q->lock);
+  q->ring[q->tail] = (ul_work_item_t){.oru = oru, .frame = frame, .slot = slot, .symbol = symbol, .job = *job};
+  q->tail = (q->tail + 1) % UL_WORK_QUEUE_DEPTH;
+  q->count++;
+  pthread_cond_signal(&q->work_available);
+  pthread_mutex_unlock(&q->lock);
+}
+
 void *oru_south_read_thread(void *arg)
 {
   ORU_t *oru = arg;
@@ -551,6 +648,23 @@ void *oru_south_read_thread(void *arg)
   int slot = start_slot;
   int frame = start_frame;
 
+  // Worker pool: one thread per RX antenna so all antennas in a symbol process in parallel.
+  const int num_workers = ru->nb_rx;
+  pthread_t workers[num_workers];
+  ul_work_queue_t work_queue = {
+    .lock = PTHREAD_MUTEX_INITIALIZER,
+    .work_available = PTHREAD_COND_INITIALIZER,
+    .space_available = PTHREAD_COND_INITIALIZER,
+    .running = true,
+  };
+  for (int i = 0; i < num_workers; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "ul_worker_%d", i);
+    threadCreate(&workers[i], ul_worker_thread, &work_queue, name, -1, OAI_PRIORITY_RT_MAX);
+  }
+
+  ul_pending_t pending_ul[MAX_PENDING_UL_JOBS] = {0};
+
   while (!oai_exit) {
     int rx_slot_type = nr_slot_select(&ru->config, frame, slot);
     for (int symbol = 0; symbol < 14; symbol++) {
@@ -573,13 +687,69 @@ void *oru_south_read_thread(void *arg)
             1,
             num_samples_read);
 
-      if (rx_slot_type == NR_UPLINK_SLOT || rx_slot_type == NR_MIXED_SLOT) {
-        int prach_symbol = get_prach_symbol(oru, frame, slot, symbol, ru->numerology);
-        if (prach_symbol != -1) {
-          receive_prach(oru, frame, slot, symbol, prach_symbol);
+      // Drain the UL job ring
+      ul_job_t new_job;
+      while (oru_fh_poll_ul_job(oru->fronthaul, &new_job) == 0) {
+        bool added = false;
+        for (int i = 0; i < MAX_PENDING_UL_JOBS; i++) {
+          if (!pending_ul[i].active) {
+            pending_ul[i] = (ul_pending_t){.job = new_job, .active = true, .symbols_sent = 0};
+            added = true;
+            break;
+          }
         }
-        stop_meas(&oru->rx);
+        if (!added)
+          LOG_W(PHY, "[ORU south] UL pending queue full, dropping job frame=%d slot=%d sym=%d\n",
+                new_job.frame, new_job.slot_in_frame, new_job.symbol);
       }
+
+      if (rx_slot_type == NR_UPLINK_SLOT || rx_slot_type == NR_MIXED_SLOT) {
+
+        // Process pending jobs whose next symbol matches the current one
+        for (int i = 0; i < MAX_PENDING_UL_JOBS; i++) {
+          if (!pending_ul[i].active)
+            continue;
+          ul_job_t *j = &pending_ul[i].job;
+
+          // Skip jobs scheduled for a future slot or frame, and drop jobs in the past
+          int slots_per_frame = fp->slots_per_frame;
+          int total_slots = 1024 * slots_per_frame;
+          int diff_slots = (j->frame * slots_per_frame + j->slot_in_frame) - (frame * slots_per_frame + slot);
+          if (diff_slots < -total_slots / 2) {
+            diff_slots += total_slots;
+          } else if (diff_slots > total_slots / 2) {
+            diff_slots -= total_slots;
+          }
+
+          if (diff_slots > 0) {
+            // Future slot: skip
+            continue;
+          }
+          if (diff_slots < 0) {
+            // Past slot: drop
+            LOG_W(PHY, "[ORU south] missed UL slot %d.%d (now %d.%d), dropping job ant=%d\n",
+                  j->frame, j->slot_in_frame, frame, slot, j->antenna_id);
+            pending_ul[i].active = false;
+            continue;
+          }
+
+          // Same slot: check symbol
+          int expected_symbol = j->symbol + pending_ul[i].symbols_sent;
+          if (expected_symbol < symbol) {
+            LOG_W(PHY, "[ORU south] missed UL symbol %d (now %d), dropping job ant=%d\n",
+                  expected_symbol, symbol, j->antenna_id);
+            pending_ul[i].active = false;
+          } else if (expected_symbol == symbol) {
+            dispatch_ul_work(&work_queue, oru, frame, slot, symbol, j);
+            if (++pending_ul[i].symbols_sent == j->num_symbols)
+              pending_ul[i].active = false;
+          }
+          // expected_symbol > symbol: job spans multiple symbols, revisit next iteration
+        }
+      }
+      int prach_symbol = get_prach_symbol(oru, frame, slot, symbol, ru->numerology);
+      if (prach_symbol != -1)
+        receive_prach(oru, frame, slot, symbol, prach_symbol);
     }
     slot++;
     if (slot == fp->slots_per_frame) {
@@ -591,6 +761,15 @@ void *oru_south_read_thread(void *arg)
     }
   }
 
-  // Perform RX processing
+  pthread_mutex_lock(&work_queue.lock);
+  work_queue.running = false;
+  pthread_cond_broadcast(&work_queue.work_available);
+  pthread_mutex_unlock(&work_queue.lock);
+  for (int i = 0; i < num_workers; i++)
+    pthread_join(workers[i], NULL);
+  pthread_cond_destroy(&work_queue.work_available);
+  pthread_cond_destroy(&work_queue.space_available);
+  pthread_mutex_destroy(&work_queue.lock);
+
   return NULL;
 }

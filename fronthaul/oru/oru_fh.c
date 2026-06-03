@@ -268,11 +268,17 @@ void oru_fh_rx_send_prach(void *handle, uint32_t **prachF, int nb_rx, int frame,
   write_prach_iq(fh->packet_processor, prachF, nb_rx, frame, slot, symbol);
 }
 
-void oru_fh_rx_send_pusch(void *handle, uint32_t **puschF, int nb_rx, int frame, int slot, int symbol)
+int oru_fh_poll_ul_job(void *handle, ul_job_t *job) {
+  oru_fh_t *fh = (oru_fh_t *)handle;
+  AssertFatal(fh, "Invalid handle\n");
+  return poll_ul_job(fh->packet_processor, job);
+}
+
+void oru_fh_rx_send_pusch(void *handle, uint32_t *puschF, int symbol_index, const ul_job_t *job)
 {
   oru_fh_t *fh = (oru_fh_t *)handle;
   AssertFatal(fh, "Invalid handle\n");
-  write_ul_iq(fh->packet_processor, puschF, nb_rx, frame, slot, symbol);
+  write_ul_iq(fh->packet_processor, puschF, symbol_index, job);
 }
 
 int oru_fh_start(void *handle)

@@ -197,10 +197,16 @@ int main(int argc, char *argv[])
 
             // For UL verification, we call write_ul_iq for every symbol.
             // It will internally check TDD and UL C-plane presence.
+            ul_job_t job;
+            int poll_ret = poll_ul_job(ctx, &job);
+            if (poll_ret == 0) {
+              for (int i = 0; i < job.num_symbols; i++) {
+                write_ul_iq(ctx, txdataF[0], job.symbol + i, &job);
+              }
+            }
             int frame = (s / 280) % 1024;
             int slot = (s / 14) % 20;
             int sym = s % 14;
-            write_ul_iq(ctx, txdataF, MAX_ANTENNAS, frame, slot, sym);
             write_prach_iq(ctx, txdataF, MAX_ANTENNAS, frame, slot, sym);
 
             // Drain ready jobs to prevent ring overflow
@@ -231,12 +237,6 @@ int main(int argc, char *argv[])
   // Flush remaining symbols
   for (int i = 0; i < 100; i++) {
     handle_absolute_symbol_tick(ctx, ++last_tick_sym);
-    int frame = (last_tick_sym / 280) % 1024;
-    int slot = (last_tick_sym / 14) % 20;
-    int sym = last_tick_sym % 14;
-    write_ul_iq(ctx, txdataF, MAX_ANTENNAS, frame, slot, sym);
-    write_prach_iq(ctx, txdataF, MAX_ANTENNAS, frame, slot, sym);
-
     // Drain ready jobs to prevent ring overflow during flush
     int f, sl, sy;
     uint64_t hf;

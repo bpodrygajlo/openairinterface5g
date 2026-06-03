@@ -615,7 +615,7 @@ void test_send_mbuf_no_frag(void *io_controller, struct rte_mbuf **mbufs, uint32
     sent_sec->fields.all_bits = rte_be_to_cpu_32(sent_sec->fields.all_bits);
 
     size_t expected_header_len = sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr)
-                                 + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr);
+                                 + sizeof(struct data_section_hdr);
 
     // In this test, we expect exactly 20 PRBs in a single packet
     assert(sent_sec->fields.num_prbu == (uint8_t)XRAN_CONVERT_NUMPRBC(20));
@@ -663,7 +663,7 @@ void test_send_mbuf_frag(void *io_controller, struct rte_mbuf **mbufs, uint32_t 
     sent_sec->fields.all_bits = rte_be_to_cpu_32(sent_sec->fields.all_bits);
 
     size_t expected_header_len = sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr)
-                                 + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr);
+                                 + sizeof(struct data_section_hdr);
 
     if (g_packets_sent == 1) {
       // First fragment: 30 PRBs
@@ -692,7 +692,7 @@ void test_send_mbuf_large_mtu(void *io_controller, struct rte_mbuf **mbufs, uint
     sent_sec->fields.all_bits = rte_be_to_cpu_32(sent_sec->fields.all_bits);
 
     size_t expected_header_len = sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr)
-                                 + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr);
+                                 + sizeof(struct data_section_hdr);
 
     // With MTU 9600, 100 PRBs should fit in a single packet
     assert(g_packets_sent == 1);
@@ -725,7 +725,7 @@ void test_send_mbuf_prb_offset(void *io_controller, struct rte_mbuf **mbufs, uin
 
     // Check data: should match the offset in txdataF
     uint32_t *iq =
-        (uint32_t *)((uint8_t *)sent_sec + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr));
+        (uint32_t *)((uint8_t *)sent_sec + sizeof(struct data_section_hdr));
     assert(rte_be_to_cpu_32(iq[0]) == 0x10101010);
 
     rte_pktmbuf_free(mbuf);
@@ -783,15 +783,20 @@ void test_uplink_basic()
 
   handle_cplane_packet(ctx, c_mbuf);
 
-  // 2. Call write_ul_iq
-  uint32_t *txdataF[1];
+  // 2. Poll the UL job created by handle_cplane_packet and call write_ul_iq
+  ul_job_t job;
+  int poll_ret = poll_ul_job(ctx, &job);
+  assert(poll_ret == 0);
+  assert(job.num_prb == 20);
+  assert(job.start_prb == 0);
+  assert(job.antenna_id == 0);
+
   uint32_t iq_input[100 * 12];
   for (int i = 0; i < 100 * 12; i++) {
     iq_input[i] = 0x11223344;
   }
-  txdataF[0] = iq_input;
 
-  write_ul_iq(ctx, txdataF, 1, frameId, slot_in_frame, startSymbolId);
+  write_ul_iq(ctx, iq_input, startSymbolId, &job);
 
   oru_packet_processor_stats_t stats;
   get_packet_processor_stats(ctx, &stats);
@@ -854,15 +859,20 @@ void test_uplink_fragmentation()
 
   handle_cplane_packet(ctx, c_mbuf);
 
-  // 2. Call write_ul_iq
-  uint32_t *txdataF[1];
+  // 2. Poll the UL job created by handle_cplane_packet and call write_ul_iq
+  ul_job_t job;
+  int poll_ret = poll_ul_job(ctx, &job);
+  assert(poll_ret == 0);
+  assert(job.num_prb == 40);
+  assert(job.start_prb == 0);
+  assert(job.antenna_id == 0);
+
   uint32_t iq_input[100 * 12];
   for (int i = 0; i < 100 * 12; i++) {
     iq_input[i] = 0x11223344;
   }
-  txdataF[0] = iq_input;
 
-  write_ul_iq(ctx, txdataF, 1, frameId, slot_in_frame, startSymbolId);
+  write_ul_iq(ctx, iq_input, startSymbolId, &job);
 
   oru_packet_processor_stats_t stats;
   get_packet_processor_stats(ctx, &stats);
@@ -940,15 +950,20 @@ void test_uplink_large_mtu()
 
   handle_cplane_packet(ctx, c_mbuf);
 
-  // 2. Call write_ul_iq
-  uint32_t *txdataF[1];
+  // 2. Poll the UL job created by handle_cplane_packet and call write_ul_iq
+  ul_job_t job;
+  int poll_ret = poll_ul_job(ctx, &job);
+  assert(poll_ret == 0);
+  assert(job.num_prb == 100);
+  assert(job.start_prb == 0);
+  assert(job.antenna_id == 0);
+
   uint32_t iq_input[num_prb * 12];
   for (int i = 0; i < num_prb * 12; i++) {
     iq_input[i] = 0x55667788;
   }
-  txdataF[0] = iq_input;
 
-  write_ul_iq(ctx, txdataF, 1, frameId, slot_in_frame, startSymbolId);
+  write_ul_iq(ctx, iq_input, startSymbolId, &job);
 
   oru_packet_processor_stats_t stats;
   get_packet_processor_stats(ctx, &stats);
@@ -1025,14 +1040,19 @@ void test_uplink_prb_offset()
 
   handle_cplane_packet(ctx, c_mbuf);
 
-  // 2. Call write_ul_iq
-  uint32_t *txdataF[1];
+  // 2. Poll the UL job created by handle_cplane_packet and call write_ul_iq
+  ul_job_t job;
+  int poll_ret = poll_ul_job(ctx, &job);
+  assert(poll_ret == 0);
+  assert(job.num_prb == 20);
+  assert(job.start_prb == 10);
+  assert(job.antenna_id == 0);
+
   uint32_t iq_input[100 * 12];
   memset(iq_input, 0, sizeof(iq_input));
   iq_input[10 * 12] = 0x10101010; // Mark PRB 10
-  txdataF[0] = iq_input;
 
-  write_ul_iq(ctx, txdataF, 1, frameId, slot_in_frame, startSymbolId);
+  write_ul_iq(ctx, iq_input, startSymbolId, &job);
 
   oru_packet_processor_stats_t stats;
   get_packet_processor_stats(ctx, &stats);

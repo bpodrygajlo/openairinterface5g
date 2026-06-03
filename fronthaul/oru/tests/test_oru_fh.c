@@ -103,9 +103,6 @@ int main(int argc, char **argv)
   uint32_t *txData[1];
   txData[0] = malloc(273 * 12 * sizeof(uint32_t));
   for (int i = 0; i < 2000; i++) {
-    if (i % 400 == 0) {
-      oru_fh_rx_send_pusch(handle, txData, 1, 0, i / 400, 0);
-    }
 
     uint64_t start_cycles = rte_get_timer_cycles();
     uint64_t target_cycles = start_cycles + (rte_get_timer_hz() / 1000);

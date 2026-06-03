@@ -1,3 +1,7 @@
+/*
+ * SPDX-License-Identifier: LicenseRef-CSSL-1.0
+ */
+
 #include "common/platform_types.h"
 #include "xran_pkt_api.h"
 #include "oru_packet_processor.h"
@@ -17,15 +21,17 @@
 
 #define PRACH_ERR_LOG_RATELIMIT 10000
 
-#define RATELIMIT(n, block) do { \
-    static _Atomic unsigned long counter = 0; \
+#define RATELIMIT(n, block)                                                               \
+  do {                                                                                    \
+    static _Atomic unsigned long counter = 0;                                             \
     unsigned long current = atomic_fetch_add_explicit(&counter, 1, memory_order_relaxed); \
-    if (current % (n) == 0) { \
-        block \
-    } \
-} while(0)
+    if (current % (n) == 0) {                                                             \
+      block                                                                               \
+    }                                                                                     \
+  } while (0)
 
 #define DL_JOB_RING_SIZE 128
+#define UL_JOB_RING_SIZE 128
 #define MAX_CONCURRENT_DL_JOBS (DL_JOB_RING_SIZE - 1)
 #define NUM_CONCURRENT_DL_SYMBOL_WINDOWS MAX_CONCURRENT_DL_JOBS
 #define NUM_CONCURRENT_UL_SYMBOL_WINDOWS 128
@@ -37,13 +43,6 @@
 #define MAX_RX_FRAGMENTS 4
 #define MAX_MBUFS_PER_SYMBOL 64
 #define MAX_SLOTS_PER_FRAME 160
-
-typedef enum {
-  SYM_UL_IDLE,
-  SYM_UL_ACTIVE,
-  SYM_UL_READY,
-  SYM_UL_EMPTY,
-} ul_symbol_job_state_t;
 
 typedef struct {
   struct {
@@ -61,17 +60,6 @@ typedef struct {
   int received_iq;
   uint64_t absolute_symbol;
 } dl_symbol_job_t;
-
-typedef struct {
-  struct {
-    bool cplane_received;
-    int section_id;
-    int num_prb;
-    int start_prb;
-  } per_antenna[MAX_ANTENNAS];
-  uint64_t absolute_symbol;
-  ul_symbol_job_state_t state;
-} ul_symbol_job_t;
 
 typedef struct {
   bool active;
@@ -95,18 +83,22 @@ typedef struct {
   _Atomic(uint64_t) prach_jobs_pool_exhausted;
   _Atomic(uint64_t) out_of_mbufs;
   _Atomic(uint64_t) total_uplane_sent;
+  _Atomic(int64_t) ul_uplane_ota_delay_sum;
+  _Atomic(uint64_t) ul_uplane_ota_delay_count;
 } thread_safe_stats_t;
 
 typedef struct {
   dl_symbol_job_t dl_symbol_jobs[MAX_CONCURRENT_DL_JOBS];
   dl_symbol_job_t *dl_symbol_rx_window[NUM_CONCURRENT_DL_SYMBOL_WINDOWS];
   bool was_dl_symbol_completed[NUM_CONCURRENT_DL_SYMBOL_WINDOWS];
-  ul_symbol_job_t ul_symbol_jobs[NUM_CONCURRENT_UL_SYMBOL_WINDOWS];
   prach_job_t prach_jobs[MAX_SLOTS_PER_FRAME][MAX_ANTENNAS];
   uint64_t current_absolute_symbol;
   uint64_t last_pushed_symbol;
   struct rte_ring *dl_free_jobs;
   struct rte_ring *dl_ready_jobs;
+  struct rte_ring *ul_free_jobs;
+  struct rte_ring *ul_ready_jobs;
+  ul_job_t ul_jobs_pool[UL_JOB_RING_SIZE];
   uint32_t T2a_min_cp_sym_diff;
   uint32_t T2a_max_cp_sym_diff;
   uint32_t T2a_min_up_dl_sym_diff;
@@ -185,6 +177,13 @@ void *init_packet_processor(int numerology,
   for (int i = 0; i < MAX_CONCURRENT_DL_JOBS; i++) {
     rte_ring_enqueue(ctx->dl_free_jobs, (void *)&ctx->dl_symbol_jobs[i]);
   }
+  ctx->ul_ready_jobs = rte_ring_create("ul_ready_jobs", UL_JOB_RING_SIZE, rte_socket_id(), 0);
+  AssertFatal(ctx->ul_ready_jobs != NULL, "Failed to create ring ul_ready_jobs\n");
+  ctx->ul_free_jobs = rte_ring_create("ul_free_jobs", UL_JOB_RING_SIZE, rte_socket_id(), 0);
+  AssertFatal(ctx->ul_free_jobs != NULL, "Failed to create ring ul_free_jobs\n");
+  for (int i = 0; i < UL_JOB_RING_SIZE - 1; i++) {
+    rte_ring_enqueue(ctx->ul_free_jobs, (void *)&ctx->ul_jobs_pool[i]);
+  }
 
   ctx->eaxcid_config = (struct xran_eaxcid_config){.mask_cuPortId = 0xF000,
                                                    .mask_bandSectorId = 0x0F00,
@@ -216,6 +215,12 @@ void cleanup_packet_processor(void *context)
     }
     if (ctx->dl_free_jobs) {
       rte_ring_free(ctx->dl_free_jobs);
+    }
+    if (ctx->ul_ready_jobs) {
+      rte_ring_free(ctx->ul_ready_jobs);
+    }
+    if (ctx->ul_free_jobs) {
+      rte_ring_free(ctx->ul_free_jobs);
     }
     free(ctx);
   }
@@ -524,31 +529,24 @@ static void handle_ul_cplane_packet(oru_packet_processor_context_t *ctx,
     ctx->stats.ul_tdd_mismatch++;
     return;
   }
-  for (int i = 0; i < num_symbols; i++) {
-    uint32_t job_index = (target_absolute_symbol + i) % NUM_CONCURRENT_UL_SYMBOL_WINDOWS;
-    ul_symbol_job_t *job = &ctx->ul_symbol_jobs[job_index];
-    if (job->state == SYM_UL_IDLE) {
-      job->absolute_symbol = target_absolute_symbol + i;
-      job->state = SYM_UL_ACTIVE;
-      for (int j = 0; j < MAX_ANTENNAS; j++) {
-        job->per_antenna[j].cplane_received = false;
-      }
-    } else if (job->state == SYM_UL_READY) {
-      ctx->stats.application_too_slow++;
-      return;
-    }
-    if (job->per_antenna[ant_id].cplane_received) {
-      ctx->stats.cplane_err_dup++;
-      ctx->stats.cplane_err_dup_ul++;
-      return;
-    }
-    job->absolute_symbol = target_absolute_symbol + i;
-    if (!job->per_antenna[ant_id].cplane_received) {
-      job->per_antenna[ant_id].cplane_received = true;
-      job->per_antenna[ant_id].section_id = section->hdr.u1.common.sectionId;
-      job->per_antenna[ant_id].num_prb = section->hdr.u1.common.numPrbc == 0 ? ctx->num_prb : section->hdr.u1.common.numPrbc;
-      job->per_antenna[ant_id].start_prb = section->hdr.u1.common.startPrbc;
-    }
+  ul_job_t *ul_job = NULL;
+  if (rte_ring_dequeue(ctx->ul_free_jobs, (void **)&ul_job) == 0) {
+    memset(ul_job, 0, sizeof(*ul_job));
+    ul_job->response_payload.section_id = section->hdr.u1.common.sectionId;
+    ul_job->response_payload.comp_method = hdr->udComp.udCompMeth;
+    ul_job->response_payload.iq_width = hdr->udComp.udIqWidth == 0 ? 16 : hdr->udComp.udIqWidth;
+    uint64_t absolute_gps_symbol = target_absolute_symbol;
+    ul_job->hyper_frame = absolute_gps_symbol / (1024 * (10 * (1 << ctx->numerology) * 14));
+    ul_job->frame = (absolute_gps_symbol / (10 * (1 << ctx->numerology) * 14)) % 1024;
+    ul_job->slot_in_frame = (absolute_gps_symbol % (10 * (1 << ctx->numerology) * 14)) / 14;
+    ul_job->symbol = absolute_gps_symbol % 14;
+    ul_job->num_symbols = num_symbols;
+    ul_job->antenna_id = ant_id;
+    ul_job->num_prb = section->hdr.u1.common.numPrbc == 0 ? ctx->num_prb : section->hdr.u1.common.numPrbc;
+    ul_job->start_prb = section->hdr.u1.common.startPrbc;
+    rte_ring_enqueue(ctx->ul_ready_jobs, (void *)ul_job);
+  } else {
+    ctx->stats.application_too_slow++;
   }
 }
 
@@ -559,9 +557,8 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
 {
   if (hdr->cmnhdr.numOfSections != 1) {
     ctx->stats.cplane_err_hdr++;
-    RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-      LOG_W(HW, "PRACH CP: Invalid numOfSections %d (expected 1)\n", hdr->cmnhdr.numOfSections);
-    });
+    RATELIMIT(PRACH_ERR_LOG_RATELIMIT,
+              { LOG_W(HW, "PRACH CP: Invalid numOfSections %d (expected 1)\n", hdr->cmnhdr.numOfSections); });
     return;
   }
 
@@ -571,17 +568,14 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
   struct xran_cp_radioapp_section3 *section = (void *)rte_pktmbuf_adj(pkt, sizeof(struct xran_cp_radioapp_section3_header));
   if (section == NULL) {
     ctx->stats.cplane_err_hdr++;
-    RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-      LOG_W(HW, "PRACH CP: Failed to adjust mbuf for section3 header\n");
-    });
+    RATELIMIT(PRACH_ERR_LOG_RATELIMIT, { LOG_W(HW, "PRACH CP: Failed to adjust mbuf for section3 header\n"); });
     return;
   }
   *((uint64_t *)section) = rte_be_to_cpu_64(*((uint64_t *)section));
   int aarx = ant_id - ctx->prach_eaxc_offset;
   if (aarx < 0 || aarx >= MAX_ANTENNAS) {
-    RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-      LOG_W(HW, "PRACH CP: Invalid aarx %d (ant_id %d, eaxc_offset %d)\n", aarx, ant_id, ctx->prach_eaxc_offset);
-    });
+    RATELIMIT(PRACH_ERR_LOG_RATELIMIT,
+              { LOG_W(HW, "PRACH CP: Invalid aarx %d (ant_id %d, eaxc_offset %d)\n", aarx, ant_id, ctx->prach_eaxc_offset); });
     return;
   }
 
@@ -602,9 +596,7 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
   uint64_t target_absolute_symbol = ctx->current_absolute_symbol + diff;
 
   if (slot_in_frame < 0 || slot_in_frame >= MAX_SLOTS_PER_FRAME) {
-    RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-      LOG_W(HW, "PRACH CP: Invalid slot_in_frame %d\n", slot_in_frame);
-    });
+    RATELIMIT(PRACH_ERR_LOG_RATELIMIT, { LOG_W(HW, "PRACH CP: Invalid slot_in_frame %d\n", slot_in_frame); });
     return;
   }
 
@@ -613,8 +605,7 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
     ctx->stats.cplane_err_dup++;
     ctx->stats.cplane_err_dup_prach++;
     RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-      LOG_W(HW, "PRACH CP: Duplicate packet for slot %d, aarx %d, start_symbol %lu\n",
-            slot_in_frame, aarx, target_absolute_symbol);
+      LOG_W(HW, "PRACH CP: Duplicate packet for slot %d, aarx %d, start_symbol %lu\n", slot_in_frame, aarx, target_absolute_symbol);
     });
     return;
   }
@@ -626,7 +617,11 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
   job->start_prb = section->hdr.u1.common.startPrbc;
   job->filter_id = hdr->cmnhdr.field.filterIndex;
   RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-    LOG_A(HW, "PRACH JOB added slot_in_frame %d, aarx %d target_absolute_symbol %lu\n", slot_in_frame, aarx, target_absolute_symbol);
+    LOG_A(HW,
+          "PRACH JOB added slot_in_frame %d, aarx %d target_absolute_symbol %lu\n",
+          slot_in_frame,
+          aarx,
+          target_absolute_symbol);
   });
 }
 
@@ -695,7 +690,13 @@ static void print_histogram(const char *name, txrx_histogram_t *hist, uint32_t w
   if (hist->count == 0)
     return;
   char buf[4096];
-  int len = snprintf(buf, sizeof(buf), "  %s (mean: %.2f symbols) window [%u, %u]:", name, (double)hist->sum / hist->count, window_start, window_end);
+  int len = snprintf(buf,
+                     sizeof(buf),
+                     "  %s (mean: %.2f symbols) window [%u, %u]:",
+                     name,
+                     (double)hist->sum / hist->count,
+                     window_start,
+                     window_end);
   bool first = true;
   for (int i = 0; i < HIST_SIZE; i++) {
     if (hist->hist[i] > 0) {
@@ -729,7 +730,8 @@ void print_packet_processor_stats(void *context)
     return;
 
   LOG_I(HW, "ORU Packet Processor Stats:\n");
-  LOG_I(HW, "  Total C-Plane Packets received: %lu (DL: %lu, UL: %lu, PRACH: %lu, Other: %lu)\n",
+  LOG_I(HW,
+        "  Total C-Plane Packets received: %lu (DL: %lu, UL: %lu, PRACH: %lu, Other: %lu)\n",
         ctx->stats.total_cplane,
         ctx->stats.cplane_received_dl,
         ctx->stats.cplane_received_ul,
@@ -737,6 +739,12 @@ void print_packet_processor_stats(void *context)
         ctx->stats.cplane_received_other);
   LOG_I(HW, "  Total U-Plane Packets received: %lu\n", ctx->stats.total_uplane_received);
   LOG_I(HW, "  Total U-Plane Packets sent: %lu\n", ctx->thread_safe_stats.total_uplane_sent);
+  if (ctx->thread_safe_stats.ul_uplane_ota_delay_count > 0)
+    LOG_I(HW,
+          "  UL U-Plane OTA delay (mean symbols): %.2f (%lu packets)\n",
+          (double)(int64_t)ctx->thread_safe_stats.ul_uplane_ota_delay_sum
+              / (double)ctx->thread_safe_stats.ul_uplane_ota_delay_count,
+          (uint64_t)ctx->thread_safe_stats.ul_uplane_ota_delay_count);
 
   if (ctx->stats.cplane_err_hdr > 0)
     LOG_I(HW, "  C-Plane Header Errors: %lu\n", ctx->stats.cplane_err_hdr);
@@ -747,7 +755,8 @@ void print_packet_processor_stats(void *context)
   if (ctx->stats.cplane_err_late > 0)
     LOG_I(HW, "  C-Plane Timing Late Errors: %lu\n", ctx->stats.cplane_err_late);
   if (ctx->stats.cplane_err_dup > 0)
-    LOG_I(HW, "  C-Plane Duplicate Packet Errors: %lu (DL: %lu, UL: %lu, PRACH: %lu)\n",
+    LOG_I(HW,
+          "  C-Plane Duplicate Packet Errors: %lu (DL: %lu, UL: %lu, PRACH: %lu)\n",
           ctx->stats.cplane_err_dup,
           ctx->stats.cplane_err_dup_dl,
           ctx->stats.cplane_err_dup_ul,
@@ -767,17 +776,22 @@ void print_packet_processor_stats(void *context)
   if (ctx->stats.ul_cplane_missing + ctx->thread_safe_stats.ul_cplane_missing > 0)
     LOG_I(HW, "  UL C-Plane Missing Errors: %lu\n", ctx->stats.ul_cplane_missing + ctx->thread_safe_stats.ul_cplane_missing);
   if (ctx->stats.prach_cplane_missing + ctx->thread_safe_stats.prach_cplane_missing > 0)
-    LOG_I(HW, "  PRACH C-Plane Missing Errors: %lu (Never Received: %lu, Stale: %lu, Early: %lu)\n",
+    LOG_I(HW,
+          "  PRACH C-Plane Missing Errors: %lu (Never Received: %lu, Stale: %lu, Early: %lu)\n",
           ctx->stats.prach_cplane_missing + ctx->thread_safe_stats.prach_cplane_missing,
           ctx->stats.prach_cplane_missing_inactive + ctx->thread_safe_stats.prach_cplane_missing_inactive,
           ctx->stats.prach_cplane_missing_stale + ctx->thread_safe_stats.prach_cplane_missing_stale,
           ctx->stats.prach_cplane_missing_early + ctx->thread_safe_stats.prach_cplane_missing_early);
   if (ctx->stats.prach_cplane_missing_ant + ctx->thread_safe_stats.prach_cplane_missing_ant > 0)
-    LOG_I(HW, "  PRACH Ant C-Plane Missing Errors: %lu\n", ctx->stats.prach_cplane_missing_ant + ctx->thread_safe_stats.prach_cplane_missing_ant);
+    LOG_I(HW,
+          "  PRACH Ant C-Plane Missing Errors: %lu\n",
+          ctx->stats.prach_cplane_missing_ant + ctx->thread_safe_stats.prach_cplane_missing_ant);
   if (ctx->stats.prach_out_of_mbufs + ctx->thread_safe_stats.prach_out_of_mbufs > 0)
     LOG_I(HW, "  PRACH Out Of Mbufs Errors: %lu\n", ctx->stats.prach_out_of_mbufs + ctx->thread_safe_stats.prach_out_of_mbufs);
   if (ctx->stats.prach_jobs_pool_exhausted + ctx->thread_safe_stats.prach_jobs_pool_exhausted > 0)
-    LOG_I(HW, "  PRACH Jobs Pool Exhausted Errors: %lu\n", ctx->stats.prach_jobs_pool_exhausted + ctx->thread_safe_stats.prach_jobs_pool_exhausted);
+    LOG_I(HW,
+          "  PRACH Jobs Pool Exhausted Errors: %lu\n",
+          ctx->stats.prach_jobs_pool_exhausted + ctx->thread_safe_stats.prach_jobs_pool_exhausted);
   if (ctx->stats.out_of_mbufs + ctx->thread_safe_stats.out_of_mbufs > 0)
     LOG_I(HW, "  Out Of Mbufs Errors: %lu\n", ctx->stats.out_of_mbufs + ctx->thread_safe_stats.out_of_mbufs);
   if (ctx->stats.application_too_slow > 0)
@@ -806,6 +820,8 @@ void get_packet_processor_stats(void *context, oru_packet_processor_stats_t *out
     out_stats->prach_jobs_pool_exhausted += ctx->thread_safe_stats.prach_jobs_pool_exhausted;
     out_stats->out_of_mbufs += ctx->thread_safe_stats.out_of_mbufs;
     out_stats->total_uplane_sent = ctx->thread_safe_stats.total_uplane_sent;
+    out_stats->ul_uplane_ota_delay_sum += ctx->thread_safe_stats.ul_uplane_ota_delay_sum;
+    out_stats->ul_uplane_ota_delay_count += ctx->thread_safe_stats.ul_uplane_ota_delay_count;
   }
 }
 
@@ -914,120 +930,134 @@ void fill_data_section_header(struct data_section_hdr *data_section_hdr, int num
   data_section_hdr->fields.all_bits = rte_cpu_to_be_32(data_section_hdr->fields.all_bits);
 }
 
-void write_ul_iq(void *context, uint32_t **txdataF, int nb_rx, int frame, int slot_in_frame, int symbol)
+int poll_ul_job(void *context, ul_job_t *job)
 {
   oru_packet_processor_context_t *ctx = (oru_packet_processor_context_t *)context;
-  if (ctx == NULL)
-    return;
-  int numerology = ctx->numerology;
-  int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << numerology) * NR_SYMBOLS_PER_SLOT;
-  uint32_t current_symbol_in_frame = ctx->current_absolute_symbol % num_symbols_per_frame;
-  int symbol_in_frame = NR_SYMBOLS_PER_SLOT * slot_in_frame + symbol;
-  int32_t diff = symbol_in_frame - current_symbol_in_frame;
-  if (diff < -num_symbols_per_frame / 2) {
-    diff += num_symbols_per_frame;
-  } else if (diff > num_symbols_per_frame / 2) {
-    diff -= num_symbols_per_frame;
+  if (ctx == NULL || job == NULL) {
+    return -1;
   }
-  uint64_t target_absolute_symbol = ctx->current_absolute_symbol + diff;
-  bool is_ul_symbol = test_bit(ctx->ul_symbol_bitmask, target_absolute_symbol % ctx->symbol_bitmask_length);
-  if (!is_ul_symbol) {
-    ctx->thread_safe_stats.ul_tdd_mismatch++;
+  ul_job_t *dequeued_job = NULL;
+  if (rte_ring_dequeue(ctx->ul_ready_jobs, (void **)&dequeued_job) == 0) {
+    *job = *dequeued_job;
+    rte_ring_enqueue(ctx->ul_free_jobs, (void *)dequeued_job);
+    return 0;
+  }
+  return -1;
+}
+
+void write_ul_iq(void *context, uint32_t *rxdataF, int symbol, const ul_job_t *job)
+{
+  oru_packet_processor_context_t *ctx = (oru_packet_processor_context_t *)context;
+  if (ctx == NULL || job == NULL)
+    return;
+  AssertFatal(symbol >= job->symbol && symbol < job->symbol + job->num_symbols && symbol < NR_SYMBOLS_PER_SLOT,
+              "Symbol %d outside of job range [%d, %d)\n",
+              symbol,
+              job->symbol,
+              job->symbol + job->num_symbols);
+
+  // Delay from OTA symbol to packet send: current timer symbol minus the absolute symbol of this UL symbol.
+  const int slots_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << ctx->numerology);
+  const uint64_t ota_absolute_symbol = (uint64_t)job->hyper_frame * 1024ULL * slots_per_frame * NR_SYMBOLS_PER_SLOT
+                                       + (uint64_t)job->frame * slots_per_frame * NR_SYMBOLS_PER_SLOT
+                                       + (uint64_t)job->slot_in_frame * NR_SYMBOLS_PER_SLOT
+                                       + (uint64_t)symbol;
+  int64_t delay = (int64_t)ctx->current_absolute_symbol - (int64_t)ota_absolute_symbol;
+  atomic_fetch_add_explicit(&ctx->thread_safe_stats.ul_uplane_ota_delay_sum, delay, memory_order_relaxed);
+  atomic_fetch_add_explicit(&ctx->thread_safe_stats.ul_uplane_ota_delay_count, 1, memory_order_relaxed);
+
+  int aarx = job->antenna_id;
+  if (aarx < 0 || aarx >= MAX_ANTENNAS) {
+    LOG_W(HW, "ORU: Invalid antenna index %d\n", aarx);
     return;
   }
-  ul_symbol_job_t *job = &ctx->ul_symbol_jobs[target_absolute_symbol % NUM_CONCURRENT_UL_SYMBOL_WINDOWS];
-  if (job->state == SYM_UL_IDLE) {
-    ctx->thread_safe_stats.ul_cplane_missing++;
-    return;
-  }
+
+  const bool use_comp = (job->response_payload.comp_method != 0);
+
+  int section_id = job->response_payload.section_id;
+  int total_ul_rbs = job->num_prb;
+  int start_prb_base = job->start_prb;
+  int frame = job->frame;
+  int slot_in_frame = job->slot_in_frame;
   int mu = ctx->numerology;
+
   struct rte_mbuf *mbufs[MAX_MBUFS_PER_SYMBOL];
   uint32_t num_mbufs = 0;
-  for (int aarx = 0; aarx < nb_rx; aarx++) {
-    if (!job->per_antenna[aarx].cplane_received) {
-      ctx->thread_safe_stats.ul_cplane_missing++;
-      continue;
+
+  int rbs_sent = 0;
+  size_t overhead = sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr)
+                    + sizeof(struct data_section_hdr);
+  if (use_comp) {
+    overhead += sizeof(struct data_section_compression_hdr);
+  }
+  int max_prb_per_packet = (int)((ctx->mtu - overhead) / (NR_NB_SC_PER_RB * sizeof(int32_t)));
+
+  while (rbs_sent < total_ul_rbs) {
+    int num_ul_rbs = total_ul_rbs - rbs_sent;
+    if (num_ul_rbs > max_prb_per_packet) {
+      num_ul_rbs = max_prb_per_packet;
     }
-    int section_id = job->per_antenna[aarx].section_id;
-    int total_ul_rbs = job->per_antenna[aarx].num_prb;
-    int start_prb_base = job->per_antenna[aarx].start_prb;
 
-    int rbs_sent = 0;
-    size_t overhead = sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr)
-                      + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr);
-    int max_prb_per_packet = (int)((ctx->mtu - overhead) / (NR_NB_SC_PER_RB * sizeof(int32_t)));
+    struct rte_mbuf *pkt = ctx->alloc_func(ctx->io_controller);
+    if (pkt == NULL) {
+      ctx->thread_safe_stats.out_of_mbufs++;
+      break;
+    }
 
-    while (rbs_sent < total_ul_rbs) {
-      int num_ul_rbs = total_ul_rbs - rbs_sent;
-      if (num_ul_rbs > max_prb_per_packet) {
-        num_ul_rbs = max_prb_per_packet;
-      }
+    size_t header_length = sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + sizeof(struct data_section_hdr);
+    if (use_comp) {
+      header_length += sizeof(struct data_section_compression_hdr);
+    }
+    const uint num_sc = num_ul_rbs * NR_NB_SC_PER_RB;
+    size_t data_len = sizeof(int32_t) * num_sc;
 
-      struct rte_mbuf *pkt = ctx->alloc_func(ctx->io_controller);
-      if (pkt == NULL) {
-        ctx->thread_safe_stats.out_of_mbufs++;
-        break;
-      }
+    char *buf = rte_pktmbuf_append(pkt, (uint16_t)(header_length + data_len));
+    if (buf == NULL) {
+      LOG_W(HW, "ORU: Failed to append data to mbuf (insufficient space)\n");
+      rte_pktmbuf_free(pkt);
+      break;
+    }
 
-      size_t header_length = sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + sizeof(struct data_section_hdr)
-                             + sizeof(struct data_section_compression_hdr);
-      const uint num_sc = num_ul_rbs * NR_NB_SC_PER_RB;
-      size_t data_len = sizeof(int32_t) * num_sc;
+    if (num_mbufs == (MAX_MBUFS_PER_SYMBOL - 1)) {
+      ctx->send_func(ctx->io_controller, mbufs, num_mbufs);
+      ctx->thread_safe_stats.total_uplane_sent += num_mbufs;
+      num_mbufs = 0;
+    }
+    mbufs[num_mbufs++] = pkt;
 
-      char *buf = rte_pktmbuf_append(pkt, (uint16_t)(header_length + data_len));
-      if (buf == NULL) {
-        LOG_W(HW, "ORU: Failed to append data to mbuf (insufficient space)\n");
-        rte_pktmbuf_free(pkt);
-        // Do not increment rbs_sent, just break and let the next symbol or antenna be processed,
-        // or we could reduce max_prb_per_packet. Breaking is safer to prevent infinite loop.
-        break;
-      }
+    struct xran_ecpri_hdr *ecpri_header = (struct xran_ecpri_hdr *)buf;
+    uint16_t ecpri_payload_size = (uint16_t)(header_length - 4 + data_len);
+    fill_ecpri_header(ecpri_header, &ctx->eaxcid_config, ECPRI_IQ_DATA, ecpri_payload_size, 0, aarx, ctx->pusch_seq_id[aarx]++, 0);
 
-      if (num_mbufs == (MAX_MBUFS_PER_SYMBOL - 1)) {
-        ctx->send_func(ctx->io_controller, mbufs, num_mbufs);
-        ctx->thread_safe_stats.total_uplane_sent += num_mbufs;
-        num_mbufs = 0;
-      }
-      mbufs[num_mbufs++] = pkt;
+    struct radio_app_common_hdr *radio_app_header = (struct radio_app_common_hdr *)(ecpri_header + 1);
+    fill_radio_app_header(radio_app_header, 0, XRAN_DIR_UL, frame, slot_in_frame, symbol, mu);
 
-      struct xran_ecpri_hdr *ecpri_header = (struct xran_ecpri_hdr *)buf;
-      // eCPRI payload size excludes the 4-byte common header
-      uint16_t ecpri_payload_size = (uint16_t)(header_length - 4 + data_len);
-      fill_ecpri_header(ecpri_header,
-                        &ctx->eaxcid_config,
-                        ECPRI_IQ_DATA,
-                        ecpri_payload_size,
-                        0,
-                        aarx,
-                        ctx->pusch_seq_id[aarx]++,
-                        0);
+    struct data_section_hdr *data_section_header = (struct data_section_hdr *)(radio_app_header + 1);
+    fill_data_section_header(data_section_header, num_ul_rbs, start_prb_base + rbs_sent, section_id);
 
-      struct radio_app_common_hdr *radio_app_header = (struct radio_app_common_hdr *)(ecpri_header + 1);
-      fill_radio_app_header(radio_app_header, 0, XRAN_DIR_UL, frame, slot_in_frame, symbol, mu);
-
-      struct data_section_hdr *data_section_header = (struct data_section_hdr *)(radio_app_header + 1);
-      fill_data_section_header(data_section_header, num_ul_rbs, start_prb_base + rbs_sent, section_id);
-
+    void *iq_data_start;
+    if (use_comp) {
       struct data_section_compression_hdr *compression_header = (struct data_section_compression_hdr *)(data_section_header + 1);
-      compression_header->ud_comp_hdr.ud_comp_meth = 0;
-      compression_header->ud_comp_hdr.ud_iq_width = XRAN_CONVERT_IQWIDTH(16);
+      compression_header->ud_comp_hdr.ud_comp_meth = job->response_payload.comp_method;
+      compression_header->ud_comp_hdr.ud_iq_width = XRAN_CONVERT_IQWIDTH(job->response_payload.iq_width);
       compression_header->rsrvd = 0;
-
-      void *iq_data_start = (void *)(compression_header + 1);
-      uint16_t *src = (uint16_t *)&txdataF[aarx][(start_prb_base + rbs_sent) * NR_NB_SC_PER_RB];
-      uint16_t *dst = (uint16_t *)iq_data_start;
-      for (int i = 0; i < num_sc * 2; i++) {
-        *dst++ = rte_cpu_to_be_16(*src++);
-      }
-      rbs_sent += num_ul_rbs;
+      iq_data_start = (void *)(compression_header + 1);
+    } else {
+      iq_data_start = (void *)(data_section_header + 1);
     }
+
+    uint16_t *src = (uint16_t *)&rxdataF[(start_prb_base + rbs_sent) * NR_NB_SC_PER_RB];
+    uint16_t *dst = (uint16_t *)iq_data_start;
+    for (int i = 0; i < num_sc * 2; i++) {
+      *dst++ = rte_cpu_to_be_16(*src++);
+    }
+    rbs_sent += num_ul_rbs;
   }
-  ctx->send_func(ctx->io_controller, mbufs, num_mbufs);
-  ctx->thread_safe_stats.total_uplane_sent += num_mbufs;
-  for (int i = 0; i < MAX_ANTENNAS; i++) {
-    job->per_antenna[i].cplane_received = false;
+
+  if (num_mbufs > 0) {
+    ctx->send_func(ctx->io_controller, mbufs, num_mbufs);
+    ctx->thread_safe_stats.total_uplane_sent += num_mbufs;
   }
-  job->state = SYM_UL_IDLE;
 }
 
 void write_prach_iq(void *context, uint32_t **txdataF, int nb_rx, int frame, int slot_in_frame, int symbol)
@@ -1052,30 +1082,36 @@ void write_prach_iq(void *context, uint32_t **txdataF, int nb_rx, int frame, int
 
   for (int aarx = 0; aarx < nb_rx; aarx++) {
     if (slot_in_frame < 0 || slot_in_frame >= MAX_SLOTS_PER_FRAME) {
-      RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-        LOG_W(HW, "PRACH UP: Invalid slot_in_frame %d\n", slot_in_frame);
-      });
+      RATELIMIT(PRACH_ERR_LOG_RATELIMIT, { LOG_W(HW, "PRACH UP: Invalid slot_in_frame %d\n", slot_in_frame); });
       continue;
     }
     prach_job_t *job = &ctx->prach_jobs[slot_in_frame][aarx];
-    if (!job->active || target_absolute_symbol < job->start_absolute_symbol || target_absolute_symbol >= job->start_absolute_symbol + job->num_symbols) {
+    if (!job->active || target_absolute_symbol < job->start_absolute_symbol
+        || target_absolute_symbol >= job->start_absolute_symbol + job->num_symbols) {
       ctx->thread_safe_stats.prach_cplane_missing++;
       if (!job->active) {
         ctx->thread_safe_stats.prach_cplane_missing_inactive++;
-        RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-          LOG_W(HW, "PRACH UP: Missing C-Plane - Inactive job for slot %d, aarx %d\n", slot_in_frame, aarx);
-        });
+        RATELIMIT(PRACH_ERR_LOG_RATELIMIT,
+                  { LOG_W(HW, "PRACH UP: Missing C-Plane - Inactive job for slot %d, aarx %d\n", slot_in_frame, aarx); });
       } else if (target_absolute_symbol < job->start_absolute_symbol) {
         ctx->thread_safe_stats.prach_cplane_missing_early++;
         RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-          LOG_W(HW, "PRACH UP: Missing C-Plane - Early symbol %lu (job start %lu) for slot %d, aarx %d\n",
-                target_absolute_symbol, job->start_absolute_symbol, slot_in_frame, aarx);
+          LOG_W(HW,
+                "PRACH UP: Missing C-Plane - Early symbol %lu (job start %lu) for slot %d, aarx %d\n",
+                target_absolute_symbol,
+                job->start_absolute_symbol,
+                slot_in_frame,
+                aarx);
         });
       } else {
         ctx->thread_safe_stats.prach_cplane_missing_stale++;
         RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-          LOG_W(HW, "PRACH UP: Missing C-Plane - Stale symbol %lu (job end %lu) for slot %d, aarx %d\n",
-                target_absolute_symbol, job->start_absolute_symbol + job->num_symbols, slot_in_frame, aarx);
+          LOG_W(HW,
+                "PRACH UP: Missing C-Plane - Stale symbol %lu (job end %lu) for slot %d, aarx %d\n",
+                target_absolute_symbol,
+                job->start_absolute_symbol + job->num_symbols,
+                slot_in_frame,
+                aarx);
         });
       }
       continue;
@@ -1090,9 +1126,7 @@ void write_prach_iq(void *context, uint32_t **txdataF, int nb_rx, int frame, int
     if (pkt == NULL) {
       ctx->thread_safe_stats.prach_out_of_mbufs++;
       ctx->thread_safe_stats.out_of_mbufs++;
-      RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-        LOG_W(HW, "PRACH UP: Failed to allocate mbuf\n");
-      });
+      RATELIMIT(PRACH_ERR_LOG_RATELIMIT, { LOG_W(HW, "PRACH UP: Failed to allocate mbuf\n"); });
       continue;
     }
 
@@ -1105,9 +1139,7 @@ void write_prach_iq(void *context, uint32_t **txdataF, int nb_rx, int frame, int
       ctx->thread_safe_stats.prach_out_of_mbufs++;
       ctx->thread_safe_stats.out_of_mbufs++;
       rte_pktmbuf_free(pkt);
-      RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
-        LOG_W(HW, "PRACH UP: Failed to append data to mbuf\n");
-      });
+      RATELIMIT(PRACH_ERR_LOG_RATELIMIT, { LOG_W(HW, "PRACH UP: Failed to append data to mbuf\n"); });
       continue;
     }
 
