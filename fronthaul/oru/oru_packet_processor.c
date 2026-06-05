@@ -644,6 +644,7 @@ void handle_cplane_packet(void *context, void *pkt)
     rte_pktmbuf_free(pkt);
     return;
   }
+  AssertFatal(apphdr->numOfSections <= 1, "Multi-section not supported: numOfSections %d\n", apphdr->numOfSections);
   apphdr->field.all_bits = rte_be_to_cpu_32(apphdr->field.all_bits);
   if (apphdr->field.payloadVer != XRAN_PAYLOAD_VER) {
     ctx->stats.cplane_err_ver++;
