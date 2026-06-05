@@ -72,6 +72,26 @@ void print_fhi_counters(ru_info_t *ru, const int frame, const int slot)
             x_counters[o_xu_id].tx_counter - old_tx_counter[o_xu_id],
             x_counters[o_xu_id].tx_bytes_per_sec * 8 / 1000L,
             x_counters[o_xu_id].Total_msgs_rcvd);
+      LOG_I(HW, "RX timing on time: %lu, early %lu late %lu corrupt %lu, duplicated %lu\n",
+        x_counters[o_xu_id].Rx_on_time,
+        x_counters[o_xu_id].Rx_early,
+        x_counters[o_xu_id].Rx_late,
+        x_counters[o_xu_id].Rx_corrupt,
+        x_counters[o_xu_id].Rx_pkt_dupl);
+
+      if (x_counters[o_xu_id].rx_err_drop > 0) {
+        LOG_W(HW,
+              "RX drops: %u, error reasons: section header: %u, pusch section header: %u, csi-rs section header %u, srs section "
+              "header %u, prach section header %u, cp section header %u, ecpri header %u\n",
+              x_counters[o_xu_id].rx_err_drop,
+              x_counters[o_xu_id].rx_err_up,
+              x_counters[o_xu_id].rx_err_pusch,
+              x_counters[o_xu_id].rx_err_csirs,
+              x_counters[o_xu_id].rx_err_srs,
+              x_counters[o_xu_id].rx_err_prach,
+              x_counters[o_xu_id].rx_err_cp,
+              x_counters[o_xu_id].rx_err_ecpri);
+      }
       for (int rxant = 0; rxant < ru->nb_rx / fh_init->xran_ports; rxant++)
         LOG_I(HW,
               "[%s%d][pusch%d %7ld prach%d %7ld]\n",
