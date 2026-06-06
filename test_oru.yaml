@@ -1,0 +1,10 @@
+procs:
+  oru:
+    cwd: build
+    shell: "sudo -E ASAN_OPTIONS=detect_odr_violation=0 LD_LIBRARY_PATH=. ./nr-oru -O ../targets/PROJECTS/GENERIC-NR-5GC/CONF/ru.band77.mu1.106rb.2x2.conf --vrtsim.role server"
+  gnb:
+    cwd: build
+    shell: "sudo -E LD_LIBRARY_PATH=. ./nr-softmodem -O ../targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.band77.mu1.106rb.fhi.2x2.conf"
+  nrue:
+    cwd: build
+    shell: "sudo -E  ASAN_OPTIONS=detect_odr_violation=0 -E LD_LIBRARY_PATH=. ./nr-uesoftmodem -C 4049760000 -r 106 --numerology 1 --ssb 516 --device.name vrtsim"
