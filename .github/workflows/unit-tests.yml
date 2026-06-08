@@ -1,0 +1,36 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [ "dev" ]
+  pull_request:
+    branches: [ "dev" ]
+
+jobs:
+  unit-tests:
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'),
+               github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build unit test image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ci-scripts/docker/Dockerfile.unittest-multistage
+        target: ran-tests
+        tags: ran-tests:ci
+        load: true
+        cache-from: type=gha,scope=ran-unittest-multistage
+        cache-to: type=gha,scope=ran-unittest-multistage,mode=max
+
+    - name: Run unit tests
+      run: |
+        docker run --rm ran-tests:ci \
+          ctest --test-dir /oai-ran/build --output-on-failure -j$(nproc)

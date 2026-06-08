@@ -1,0 +1,13 @@
+# cppcheck suppression file - one rule per line.
+# Formats:
+#   <check>                          suppress globally
+#   <check>:<file>                   suppress in a specific file (glob ok)
+#   <check>:<file>:<line>            suppress at a specific line
+#   // cppcheck-suppress <check>     suppress inline in source code
+# Examples:
+#   unusedFunction
+#   nullPointer:src/some_module.c
+#   variableScope:radio/zmq/*
+
+missingInclude
+unmatchedSuppression

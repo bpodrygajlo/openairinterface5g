@@ -6,6 +6,7 @@ add_library(vrtsim MODULE
   cirdb_provider.c
   cirdb_yaml.cpp
 )
+add_static_analysis_to_target(vrtsim)
 
 set_target_properties(vrtsim PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 

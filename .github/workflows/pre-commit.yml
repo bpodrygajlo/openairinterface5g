@@ -1,0 +1,24 @@
+name: Pre-Commit Checks
+
+on:
+  push:
+    branches: [ "dev" ]
+  pull_request:
+    branches: [ "dev" ]
+
+jobs:
+  pre-commit:
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'),
+               github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+    - name: Run pre-commit hooks
+      uses: pre-commit/action@v3.0.1
