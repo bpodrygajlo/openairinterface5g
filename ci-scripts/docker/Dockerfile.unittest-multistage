@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: LicenseRef-CSSL-1.0
+#
+# Lean build base for OAI unit tests -- Ubuntu 24.04.
+# Provides compiler toolchain, ASN1c, SIMDE, and all library dependencies
+# needed to build and run unit tests. Omits radio hardware drivers (UHD,
+# BladeRF) present in the full ran-base image.
+
+FROM ubuntu:noble AS ran-unittest-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Europe/Paris
+
+RUN apt-get update && \
+    apt-get upgrade --yes && \
+    apt-get install --yes \
+        # Build toolchain
+        build-essential \
+        cmake \
+        ninja-build \
+        ccache \
+        pkg-config \
+        git \
+        automake \
+        libtool \
+        patch \
+        # Required by ASN1c build
+        bison \
+        flex \
+        # OAI core library dependencies
+        libconfig-dev \
+        libsctp-dev \
+        libssl-dev \
+        libyaml-cpp-dev \
+        libzstd-dev \
+        libpcre2-dev \
+        zlib1g-dev \
+        xxd \
+        # Unit test and radio-module dependencies
+        libgtest-dev \
+        libzmq3-dev \
+        flatbuffers-compiler \
+        libflatbuffers-dev \
+        libnanomsg-dev \
+        dpdk-dev \
+        dpdk \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/mouse07410/asn1c /tmp/asn1c && \
+    cd /tmp/asn1c && \
+    git checkout 940dd5fa9f3917913fd487b13dfddfacd0ded06e && \
+    autoreconf -iv && \
+    CFLAGS="-O2 -fno-strict-aliasing" ./configure --prefix /opt/asn1c/ && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig && \
+    rm -rf /tmp/asn1c
+
+RUN git clone https://github.com/simd-everywhere/simde-no-tests.git /usr/include/simde && \
+    cd /usr/include/simde && \
+    git checkout c7f26b73ba8e874b95c2cec2b497826ad2188f68
+
+FROM ran-unittest-base AS ran-tests
+
+WORKDIR /oai-ran
+COPY . .
+
+WORKDIR /oai-ran/build
+RUN \
+   # Mount CCache cache direrctory
+   --mount=type=cache,target=/root/.cache/ccache/ \
+   # Mount CPM package cache
+   --mount=type=cache,target=/root/.cache/cpm/ \
+   cmake .. -GNinja \
+      -DENABLE_TESTS=ON -DOAI_ZMQ=ON -DCMAKE_BUILD_TYPE=Debug \
+      -DSANITIZE_ADDRESS=True -DOAI_VRTSIM_TAPS_CLIENT=ON -DOAI_RU_FRONTHAUL=ON \
+    && \
+    ninja tests

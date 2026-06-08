@@ -1,0 +1,31 @@
+---
+# Checks are additive. Start with everything disabled (-*), then selectively
+# enable check families. Prefix any entry with '-' to suppress it.
+#
+# To suppress a specific check in source code use:
+#   // NOLINT(check-name)           — suppress on this line
+#   // NOLINTNEXTLINE(check-name)   — suppress on the next line
+#   // NOLINTBEGIN(check-name) ... // NOLINTEND(check-name)  — suppress a block
+Checks: >-
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  performance-*,
+  portability-*,
+  readability-misleading-indentation,
+  readability-misplaced-array-index,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-narrowing-conversions,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+# Promote matched checks to errors (empty = warnings only).
+WarningsAsErrors: ''
+
+# Report diagnostics from headers whose path matches this regex.
+# Empty string = no header diagnostics.
+HeaderFilterRegex: ''
+
+CheckOptions: []
