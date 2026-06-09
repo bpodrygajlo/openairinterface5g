@@ -9,6 +9,7 @@ FROM ubuntu:noble AS ran-unittest-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Paris
+ENV CCACHE_MAXSIZE=4G
 
 RUN apt-get update && \
     apt-get upgrade --yes && \
@@ -67,12 +68,12 @@ COPY . .
 
 WORKDIR /oai-ran/build
 RUN \
-   # Mount CCache cache direrctory
+   # Mount CCache cache directory
    --mount=type=cache,target=/root/.cache/ccache/ \
    # Mount CPM package cache
    --mount=type=cache,target=/root/.cache/cpm/ \
    cmake .. -GNinja \
       -DENABLE_TESTS=ON -DOAI_ZMQ=ON -DCMAKE_BUILD_TYPE=Debug \
       -DSANITIZE_ADDRESS=True -DOAI_VRTSIM_TAPS_CLIENT=ON -DOAI_RU_FRONTHAUL=ON \
-    && \
-    ninja tests
+   && \
+   ninja tests

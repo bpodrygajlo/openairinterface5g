@@ -17,7 +17,28 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Docker Buildx
+      id: buildx
       uses: docker/setup-buildx-action@v3
+
+    - name: Cache BuildKit Cache Mounts
+      uses: actions/cache@v4
+      id: cache-buildkit
+      with:
+        path: .buildkit-cache
+        key: ${{ runner.os }}-buildkit-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildkit-
+
+    - name: Inject Cache into BuildKit
+      uses: reproducible-containers/buildkit-cache-dance@v3
+      with:
+        builder: ${{ steps.buildx.outputs.name }}
+        cache-map: |
+          {
+            ".buildkit-cache/ccache": "/root/.cache/ccache",
+            ".buildkit-cache/cpm": "/root/.cache/cpm"
+          }
+        skip-extraction: ${{ steps.cache-buildkit.outputs.cache-hit }}
 
     - name: Build unit test image
       uses: docker/build-push-action@v6
