@@ -7,6 +7,13 @@ add_dependencies(tests test_fh_timer)
 add_test(NAME test_fh_timer COMMAND test_fh_timer ${DPDK_TEST_ARGS} "--file-prefix=test_fh_timer")
 set_property(TEST test_fh_timer PROPERTY LABELS fronthaul)
 
+add_executable(test_fh_timer_jumps test_fh_timer_jumps.c)
+target_link_libraries(test_fh_timer_jumps PRIVATE fh_timer ${dpdk_LIBRARIES} "-Wl,--wrap=clock_gettime")
+target_include_directories(test_fh_timer_jumps PRIVATE ${dpdk_INCLUDE_DIRS})
+add_dependencies(tests test_fh_timer_jumps)
+add_test(NAME test_fh_timer_jumps COMMAND test_fh_timer_jumps ${DPDK_TEST_ARGS} "--file-prefix=test_fh_timer_jumps")
+set_property(TEST test_fh_timer_jumps PROPERTY LABELS fronthaul)
+
 add_executable(test_fh_timer_drift test_fh_timer_drift.c)
 target_link_libraries(test_fh_timer_drift PRIVATE fh_timer ${dpdk_LIBRARIES} m)
 target_include_directories(test_fh_timer_drift PRIVATE ${dpdk_INCLUDE_DIRS})

@@ -1,0 +1,17 @@
+procs:
+  local_ptp4l:
+    cwd: .
+    shell: "sudo ptp4l -f pyinfra/oai_ptp-2.conf -m --ptp_minor_version=0"
+
+  spark_ptp4l:
+    cwd: .
+    shell: "ssh 10.0.8.1 'sudo ptp4l -f /home/bpodrygajlo/openairinterface5g/pyinfra/spark-ptp.conf -m --ptp_minor_version=0'"
+  local_phc2sys:
+    cwd: .
+    shell: "sudo phc2sys -a -r -r -n 24 -m -F 0.00002"
+  spark_phc2sys:
+    cwd: .
+    shell: "ssh 10.0.8.1 'sudo phc2sys -a -r -r -n 24 -m -F 0.00002'"
+proc_log:
+  enabled: true
+  dir: ./ptp_logs

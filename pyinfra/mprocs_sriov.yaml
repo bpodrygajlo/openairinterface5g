@@ -1,0 +1,8 @@
+procs:
+  local_sriov:
+    cwd: .
+    shell: "bash pyinfra/setup_du_ifs_for_spark.sh"
+
+  spark_sriov:
+    cwd: .
+    shell: "ssh 10.0.8.1 'cd /home/bpodrygajlo/openairinterface5g && bash pyinfra/spark-setup-ifs.sh'"

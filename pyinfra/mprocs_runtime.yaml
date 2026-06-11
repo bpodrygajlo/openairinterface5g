@@ -1,0 +1,15 @@
+procs:
+  gnb:
+    cwd: build
+    shell: "sudo -E LD_LIBRARY_PATH=. ./nr-softmodem -O ../pyinfra/gnb.2x2-for-spark.conf"
+
+  nr-oru:
+    cwd: .
+    shell: "ssh 10.0.8.1 'cd /home/bpodrygajlo/openairinterface5g/build && sudo -E ASAN_OPTIONS=detect_odr_violation=0 LD_LIBRARY_PATH=. ./nr-oru -O ../pyinfra/spark-ru.conf --vrtsim.role server'"
+
+  nr-ue:
+    cwd: .
+    shell: "ssh 10.0.8.1 'cd /home/bpodrygajlo/openairinterface5g/build && sudo -E ASAN_OPTIONS=detect_odr_violation=0 LD_LIBRARY_PATH=. ./nr-uesoftmodem -C 4049760000 -r 106 --numerology 1 --ssb 516 --device.name vrtsim'"
+proc_log:
+  enabled: true
+  dir: ./runtime_logs
