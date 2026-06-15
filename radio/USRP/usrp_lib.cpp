@@ -25,6 +25,7 @@
 #include <fstream>
 #include <cmath>
 #include <time.h>
+#include <vector>
 #include "common/utils/LOG/log.h"
 #include "common_lib.h"
 #include "assertions.h"
@@ -84,6 +85,8 @@ typedef struct {
   //int first_rx;
   //! timestamp of RX packet
   openair0_timestamp_t rx_timestamp;
+  bool utc_sync;
+  double wall_to_hw_offset;
 } usrp_state_t;
 
 //void print_notes(void)
@@ -1039,6 +1042,23 @@ static void usrp_sync_pps(usrp_state_t *s)
   LOG_I(HW, "USRP clock set to %f sec\n", tai_sec);
 }
 
+openair0_timestamp_t get_timestamp(openair0_device *device, struct timespec *utc_ts) {
+  usrp_state_t *s = (usrp_state_t *)device->priv;
+  if (!s->utc_sync) {
+    return 0;
+  }
+
+  // 1. CPU-domain UTC (The "Wall Clock")
+  double wall_secs = (double)utc_ts->tv_sec + (double)utc_ts->tv_nsec / 1e9;
+
+  // 2. Map to Hardware-domain UTC
+  double hw_secs = wall_secs + s->wall_to_hw_offset;
+  auto ts = uhd::time_spec_t(hw_secs);
+
+  // 3. Convert to Absolute Ticks
+  return (openair0_timestamp_t)(ts.to_ticks(s->sample_rate));
+}
+
 extern "C" {
   int device_init(openair0_device_t *device, openair0_config_t *openair0_cfg)
   {
@@ -1432,6 +1452,8 @@ extern "C" {
 
     if (sync_to_gps(device) == EXIT_SUCCESS) {
       LOG_I(HW, "USRP synced with GPS!\n");
+      s->wall_to_hw_offset = 0.0;
+      s->utc_sync = true;
     } else {
       LOG_I(HW, "USRP fails to sync with GPS. Exiting.\n");
       exit(EXIT_FAILURE);
@@ -1439,8 +1461,57 @@ extern "C" {
   } else {
     if (s->usrp->get_time_source(0) == "external") {
       usrp_sync_pps(s);
+      s->wall_to_hw_offset = 0.0;
+      s->utc_sync = true;
     } else {
       s->usrp->set_time_next_pps(uhd::time_spec_t(0.0));
+      // No GPS sync and no external clock - best effort to sync to host clock
+      // estimate rtt of get_time_last_pps()
+      const int n_tries = 100;
+      const uint64_t ns_to_s = 1000000000;
+      std::vector<uint64_t> rtt_samples;
+      for (int i = 0; i < n_tries; i++) {
+        struct timespec start;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        s->usrp->get_time_last_pps();
+        struct timespec end;
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        uint64_t rtt_sample = (end.tv_sec - start.tv_sec) * ns_to_s + (end.tv_nsec - start.tv_nsec);
+        rtt_samples.push_back(rtt_sample);
+      }
+      uint64_t rtt_sum = 0;
+      for (int i = 0; i < n_tries; i++) {
+        rtt_sum += rtt_samples[i];
+      }
+      double rtt_mean = rtt_sum / (double)n_tries;
+      double rtt_var = 0;
+      for (int i = 0; i < n_tries; i++) {
+        rtt_var += (rtt_mean - rtt_samples[i]) * (rtt_mean - rtt_samples[i]);
+      }
+      rtt_var /= n_tries;
+
+      double rtt_stdev = sqrt(rtt_var);
+      LOG_A(HW, "RTT of get_time_last_pps() mean %f stdev %f uS\n", rtt_mean / 1e3, rtt_stdev / 1e3);
+      uhd::time_spec_t time_last_pps = s->usrp->get_time_last_pps();
+
+      while (time_last_pps == s->usrp->get_time_last_pps()) {
+      }
+      struct timespec now;
+      int ret = clock_gettime(CLOCK_REALTIME, &now);
+      if (ret != 0) {
+        LOG_E(HW, "Failed to get time from clock");
+        exit(EXIT_FAILURE);
+      }
+      double utc_timestamp = now.tv_sec + 1.0 + now.tv_nsec / 1e9;
+      s->usrp->set_time_next_pps(uhd::time_spec_t(utc_timestamp));
+
+      double extra_offset = 0.0;
+      if (rtt_stdev > 100000.0) { // 100 uS threshold in ns
+        extra_offset = rtt_stdev;
+        LOG_W(HW, "Large RTT variance detected (stdev = %f uS). Adding compensation offset: %f uS\n", rtt_stdev / 1e3, extra_offset / 1e3);
+      }
+      s->wall_to_hw_offset = (double)(rtt_mean * 2.0 + extra_offset) / 1e9;
+      s->utc_sync = true;
     }
 
     if (s->usrp->get_clock_source(0) == "external") {
@@ -1519,6 +1590,7 @@ extern "C" {
   LOG_I(HW,"Device timestamp: %f...\n", s->usrp->get_time_now().get_real_secs());
   device->trx_write_func = trx_usrp_write;
   device->trx_read_func  = trx_usrp_read;
+  device->get_timestamp = get_timestamp;
   s->sample_rate = openair0_cfg[0].sample_rate;
 
   // TODO:
