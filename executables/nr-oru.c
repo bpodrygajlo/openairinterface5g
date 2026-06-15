@@ -21,6 +21,7 @@
 #include "common/config/config_userapi.h"
 #include "common/utils/system.h"
 #include "nr-oru.h"
+#include "openair2/ENB_APP/enb_paramdef.h"
 #include "openair1/PHY/defs_nr_common.h"
 #include "PHY/NR_TRANSPORT/nr_transport_proto.h"
 #include "oru_packet_processor.h"
@@ -76,6 +77,12 @@
   {CONFIG_STRING_ORU_NUM_UL_SLOTS,              HLP_ORU_NUM_UL_SLOTS,               0,    .uptr=NULL,       .defintval=1,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_NUM_DL_SYMBOLS,            HLP_ORU_NUM_DL_SYMBOLS,             0,    .uptr=NULL,       .defintval=7,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_NUM_UL_SYMBOLS,            HLP_ORU_NUM_UL_SYMBOLS,             0,    .uptr=NULL,       .defintval=3,                 TYPE_UINT,         0}, \
+  {CONFIG_STRING_RU_SDR_ADDRS,                  NULL,                               0,    .strptr=NULL,     .defstrval="type=b200",       TYPE_STRING,       0}, \
+  {CONFIG_STRING_RU_SDR_CLK_SRC,                NULL,                               0,    .strptr=NULL,     .defstrval="internal",        TYPE_STRING,       0}, \
+  {CONFIG_STRING_RU_SDR_TME_SRC,                NULL,                               0,    .strptr=NULL,     .defstrval="internal",        TYPE_STRING,       0}, \
+  {CONFIG_STRING_RU_TX_SUBDEV,                  NULL,                               0,    .strptr=NULL,     .defstrval="",                TYPE_STRING,       0}, \
+  {CONFIG_STRING_RU_RX_SUBDEV,                  NULL,                               0,    .strptr=NULL,     .defstrval="",                TYPE_STRING,       0}, \
+  {CONFIG_STRING_RU_GPIO_CONTROL,               NULL,                               0,    .strptr=NULL,     .defstrval="generic",         TYPE_STRING,       0}, \
 }
 // clang-format on
 
@@ -221,6 +228,63 @@ int get_oru_options(ORU_t *oru)
   oru->num_UL_slots = *gpd(param, nump, CONFIG_STRING_ORU_NUM_UL_SLOTS)->iptr;
   oru->num_DL_symbols = *gpd(param, nump, CONFIG_STRING_ORU_NUM_DL_SYMBOLS)->iptr;
   oru->num_UL_symbols = *gpd(param, nump, CONFIG_STRING_ORU_NUM_UL_SYMBOLS)->iptr;
+
+  const paramdef_t *sdr_addrs_param = gpd(param, nump, CONFIG_STRING_RU_SDR_ADDRS);
+  if (sdr_addrs_param && sdr_addrs_param->strptr && *sdr_addrs_param->strptr) {
+    oru->ru->openair0_cfg.sdr_addrs = strdup(*sdr_addrs_param->strptr);
+  }
+
+  const paramdef_t *tx_subdev_param = gpd(param, nump, CONFIG_STRING_RU_TX_SUBDEV);
+  if (tx_subdev_param && tx_subdev_param->strptr && *tx_subdev_param->strptr) {
+    oru->ru->openair0_cfg.tx_subdev = strdup(*tx_subdev_param->strptr);
+  }
+
+  const paramdef_t *rx_subdev_param = gpd(param, nump, CONFIG_STRING_RU_RX_SUBDEV);
+  if (rx_subdev_param && rx_subdev_param->strptr && *rx_subdev_param->strptr) {
+    oru->ru->openair0_cfg.rx_subdev = strdup(*rx_subdev_param->strptr);
+  }
+
+  const paramdef_t *clock_src_param = gpd(param, nump, CONFIG_STRING_RU_SDR_CLK_SRC);
+  if (clock_src_param && clock_src_param->strptr && *clock_src_param->strptr) {
+    char *str = *clock_src_param->strptr;
+    if (strcmp(str, "internal") == 0) {
+      oru->ru->openair0_cfg.clock_source = internal;
+    } else if (strcmp(str, "external") == 0) {
+      oru->ru->openair0_cfg.clock_source = external;
+    } else if (strcmp(str, "gpsdo") == 0) {
+      oru->ru->openair0_cfg.clock_source = gpsdo;
+    }
+  } else {
+    oru->ru->openair0_cfg.clock_source = internal;
+  }
+
+  const paramdef_t *time_src_param = gpd(param, nump, CONFIG_STRING_RU_SDR_TME_SRC);
+  if (time_src_param && time_src_param->strptr && *time_src_param->strptr) {
+    char *str = *time_src_param->strptr;
+    if (strcmp(str, "internal") == 0) {
+      oru->ru->openair0_cfg.time_source = internal;
+    } else if (strcmp(str, "external") == 0) {
+      oru->ru->openair0_cfg.time_source = external;
+    } else if (strcmp(str, "gpsdo") == 0) {
+      oru->ru->openair0_cfg.time_source = gpsdo;
+    }
+  } else {
+    oru->ru->openair0_cfg.time_source = internal;
+  }
+
+  const paramdef_t *gpio_control_param = gpd(param, nump, CONFIG_STRING_RU_GPIO_CONTROL);
+  if (gpio_control_param && gpio_control_param->strptr && *gpio_control_param->strptr) {
+    char *str = *gpio_control_param->strptr;
+    if (strcmp(str, "generic") == 0) {
+      oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_GENERIC;
+    } else if (strcmp(str, "interdigital") == 0) {
+      oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_INTERDIGITAL;
+    } else {
+      oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_NONE;
+    }
+  } else {
+    oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_NONE;
+  }
 
   paramdef_t fh_param[] = CMDLINE_PARAMS_DESC_ORU_FH;
   nump = sizeofArray(fh_param);
@@ -413,6 +477,39 @@ static void dl_symbol_process(RU_t *ru, int frame, int slot, int symbol, c16_t *
   tx_rf_symbols(ru, frame, slot, timestamp, symbol, 1);
 }
 
+static pthread_mutex_t south_read_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t south_read_cond = PTHREAD_COND_INITIALIZER;
+static bool south_read_ready = false;
+static uint64_t notified_hyper_frame = 0;
+static uint32_t notified_start_frame = 0;
+static uint32_t notified_start_slot = 0;
+static openair0_timestamp_t notified_timestamp = 0;
+
+void notify_north_read(uint64_t hyper_frame, uint32_t start_frame, uint32_t start_slot, openair0_timestamp_t timestamp)
+{
+  pthread_mutex_lock(&south_read_mutex);
+  notified_hyper_frame = hyper_frame;
+  notified_start_frame = start_frame;
+  notified_start_slot = start_slot;
+  notified_timestamp = timestamp;
+  south_read_ready = true;
+  pthread_cond_signal(&south_read_cond);
+  pthread_mutex_unlock(&south_read_mutex);
+}
+
+void wait_for_south_read(uint64_t *hyper_frame, uint32_t *start_frame, uint32_t *start_slot, int64_t *timestamp)
+{
+  pthread_mutex_lock(&south_read_mutex);
+  while (!south_read_ready) {
+    pthread_cond_wait(&south_read_cond, &south_read_mutex);
+  }
+  *hyper_frame = notified_hyper_frame;
+  *start_frame = notified_start_frame;
+  *start_slot = notified_start_slot;
+  *timestamp = notified_timestamp;
+  pthread_mutex_unlock(&south_read_mutex);
+}
+
 void *oru_north_read_thread(void *arg)
 {
   ORU_t *oru = (ORU_t *)arg;
@@ -428,11 +525,15 @@ void *oru_north_read_thread(void *arg)
   }
   uint32_t start_frame, start_slot;
   uint64_t start_hyper_frame;
-  struct timespec utc_anchor_point;
-  oru_fh_get_utc_anchor_point(oru->fronthaul, &start_hyper_frame, &start_frame, &start_slot, &utc_anchor_point);
-  AssertFatal(ru->rfdevice.get_timestamp != NULL, "rfdevice has no capability to translate UTC timestamp to sample index\n");
-  int64_t start_timestamp = ru->rfdevice.get_timestamp(&ru->rfdevice, &utc_anchor_point);
-  // subtract the start_frame and start_slot from the timestamp simplify calculation below.
+  int64_t start_timestamp;
+  if (ru->rfdevice.get_timestamp) {
+    struct timespec utc_anchor_point;
+    oru_fh_get_utc_anchor_point(oru->fronthaul, &start_hyper_frame, &start_frame, &start_slot, &utc_anchor_point);
+    start_timestamp = ru->rfdevice.get_timestamp(&ru->rfdevice, &utc_anchor_point);
+  } else {
+    wait_for_south_read(&start_hyper_frame, &start_frame, &start_slot, &start_timestamp);
+  }
+    // subtract the start_frame and start_slot from the timestamp simplify calculation below.
   start_timestamp -= (start_frame * fp->samples_per_frame + get_samples_slot_timestamp(fp, start_slot));
   // Now start_timestamp points to the start sample of the frame 0 slot 0 symbol 0 of hyperframe 0
   LOG_A(PHY, "DL thread started: start_timestamp %ld, start_frame %d, start_slot %d\n", start_timestamp, start_frame, start_slot);
@@ -615,45 +716,63 @@ void *oru_south_read_thread(void *arg)
   ORU_t *oru = arg;
   RU_t *ru = oru->ru;
   NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
+  int slot, frame;
+  uint32_t start_frame = 0, start_slot = 0;
+  uint64_t hyper_frame = 0;
   struct timespec utc_anchor_point;
-  AssertFatal(ru->rfdevice.get_timestamp != NULL, "rfdevice has no capability to translate UTC timestamp to sample index\n");
-  uint32_t start_frame, start_slot;
-  uint64_t hyper_frame;
-  oru_fh_get_utc_anchor_point(oru->fronthaul, &hyper_frame, &start_frame, &start_slot, &utc_anchor_point);
-  int64_t start_timestamp = ru->rfdevice.get_timestamp(&ru->rfdevice, &utc_anchor_point);
+  if (ru->rfdevice.get_timestamp) {
+    AssertFatal(ru->rfdevice.get_timestamp != NULL, "rfdevice has no capability to translate UTC timestamp to sample index\n");
+    oru_fh_get_utc_anchor_point(oru->fronthaul, &hyper_frame, &start_frame, &start_slot, &utc_anchor_point);
+    int64_t start_timestamp = ru->rfdevice.get_timestamp(&ru->rfdevice, &utc_anchor_point);
 
-  const int num_samples = 3000;
-  c16_t throwaway_samples[ru->nb_rx][num_samples];
-  void *rxp[ru->nb_rx];
-  for (int i = 0; i < ru->nb_rx; i++)
-    rxp[i] = throwaway_samples[i];
+    const int num_samples = 3000;
+    c16_t throwaway_samples[ru->nb_rx][num_samples];
+    void *rxp[ru->nb_rx];
+    for (int i = 0; i < ru->nb_rx; i++)
+      rxp[i] = throwaway_samples[i];
 
-  openair0_timestamp_t timestamp;
-  int num_samples_read = ru->rfdevice.trx_read_func(&ru->rfdevice, &timestamp, rxp, num_samples, ru->nb_rx);
-  AssertFatal(num_samples_read == num_samples, "Unexpected number of samples received\n");
-  openair0_timestamp_t next_timestamp = timestamp + num_samples_read;
-  while (next_timestamp > start_timestamp) {
-    start_timestamp += get_samples_slot_duration(fp, start_slot, 1);
-    start_slot++;
-    if (start_slot == fp->slots_per_frame) {
-      start_slot = 0;
-      start_frame++;
-      if (start_frame == 1024) {
-        start_frame = 0;
+    openair0_timestamp_t timestamp;
+    int num_samples_read = ru->rfdevice.trx_read_func(&ru->rfdevice, &timestamp, rxp, num_samples, ru->nb_rx);
+    AssertFatal(num_samples_read == num_samples, "Unexpected number of samples received\n");
+    openair0_timestamp_t next_timestamp = timestamp + num_samples_read;
+    while (next_timestamp > start_timestamp) {
+      start_timestamp += get_samples_slot_duration(fp, start_slot, 1);
+      start_slot++;
+      if (start_slot == fp->slots_per_frame) {
+        start_slot = 0;
+        start_frame++;
+        if (start_frame == 1024) {
+          start_frame = 0;
+        }
       }
     }
-  }
-  while (next_timestamp < start_timestamp) {
-    int num_samples_to_read = min(num_samples, (int)(start_timestamp - next_timestamp));
-    int num_samples_read = ru->rfdevice.trx_read_func(&ru->rfdevice, &timestamp, rxp, num_samples_to_read, ru->nb_rx);
-    AssertFatal(num_samples_read == num_samples_to_read, "Unexpected number of samples received\n");
-    next_timestamp += num_samples_read;
-  }
+    while (next_timestamp < start_timestamp) {
+      int num_samples_to_read = min(num_samples, (int)(start_timestamp - next_timestamp));
+      int num_samples_read = ru->rfdevice.trx_read_func(&ru->rfdevice, &timestamp, rxp, num_samples_to_read, ru->nb_rx);
+      AssertFatal(num_samples_read == num_samples_to_read, "Unexpected number of samples received\n");
+      next_timestamp += num_samples_read;
+    }
 
-  AssertFatal(next_timestamp == start_timestamp, "O-RU South thread could not sync to UTC anchor point\n");
-
-  int slot = start_slot;
-  int frame = start_frame;
+    AssertFatal(next_timestamp == start_timestamp, "O-RU South thread could not sync to UTC anchor point\n");
+  } else {
+    int num_iter = 100;
+    const int num_samples = 3000;
+    openair0_timestamp_t timestamp;
+    c16_t throwaway_samples[ru->nb_rx][num_samples];
+    void *rxp[ru->nb_rx];
+    for (int i = 0; i < ru->nb_rx; i++) {
+      rxp[i] = throwaway_samples[i];
+    }
+    while (!oai_exit && num_iter-- > 0) {
+      int num_samples_read = ru->rfdevice.trx_read_func(&ru->rfdevice, &timestamp, rxp, num_samples, ru->nb_rx);
+      AssertFatal(num_samples_read == num_samples, "Unexpected number of samples received\n");
+    }
+    oru_fh_get_utc_anchor_point(oru->fronthaul, &hyper_frame, &start_frame, &start_slot, &utc_anchor_point);
+    timestamp += num_samples;
+    notify_north_read(hyper_frame, start_frame, start_slot, timestamp);
+  }
+  slot = start_slot;
+  frame = start_frame;
 
   // Worker pool: one thread per RX antenna so all antennas in a symbol process in parallel.
   const int num_workers = ru->nb_rx;

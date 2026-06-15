@@ -221,11 +221,11 @@ int main(int argc, char **argv)
   oru.fronthaul = oru_fh_init(&oru.fh_config);
   AssertFatal(oru.fronthaul != NULL, "Cannot configure oru fronthaul, check your config file/cmdline");
 
-  LOG_I(PHY, "starting vrtsim\n");
-  ret = openair0_load(&ru->rfdevice, "vrtsim", &ru->openair0_cfg, NULL);
-  AssertFatal(ret == 0, "RU %u: openair0_load() ret %d: cannot initialize vrtsim\n", ru->idx, ret);
+  LOG_I(PHY, "starting rfdevice\n");
+  ret = openair0_device_load(&ru->rfdevice, &ru->openair0_cfg);
+  AssertFatal(ret == 0, "RU %u: openair0_device_load() ret %d: cannot initialize rfdevice\n", ru->idx, ret);
   ret = ru->rfdevice.trx_start_func(&ru->rfdevice);
-  AssertFatal(ret == 0, "RU %u: trx_start_func() ret %d: cannot start vrtsim\n", ru->idx, ret);
+  AssertFatal(ret == 0, "RU %u: trx_start_func() ret %d: cannot start rfdevice\n", ru->idx, ret);
 
   threadCreate(&oru.north_read_thread, oru_north_read_thread, (void *)&oru, "north_read_thread", -1, OAI_PRIORITY_RT_MAX);
   threadCreate(&oru.south_read_thread, oru_south_read_thread, (void *)&oru, "south_read_thread", -1, OAI_PRIORITY_RT_MAX);
