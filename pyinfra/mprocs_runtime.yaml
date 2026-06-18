@@ -5,7 +5,7 @@ procs:
 
   nr-oru:
     cwd: .
-    shell: "ssh 10.0.8.1 'cd /home/bpodrygajlo/openairinterface5g/build && sudo -E ASAN_OPTIONS=detect_odr_violation=0 LD_LIBRARY_PATH=. ./nr-oru -O ../pyinfra/spark-ru.conf --vrtsim.role server'"
+    shell: "ssh 10.0.8.1 'cd /home/bpodrygajlo/openairinterface5g/build && sudo -E ASAN_OPTIONS=detect_odr_violation=0 LD_LIBRARY_PATH=. ./nr-oru -O ../pyinfra/spark-ru.conf --device.name vrtsim --vrtsim.role server'"
 
   nr-ue:
     cwd: .

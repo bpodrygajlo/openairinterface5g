@@ -261,9 +261,11 @@ static void *vrtsim_timing_job(void *arg)
     uint64_t diff = (current_time.tv_sec - vrtsim_state->start_ts.tv_sec) * 1000000000
                     + (current_time.tv_nsec - vrtsim_state->start_ts.tv_nsec);
     double sample_index = vrtsim_state->sample_rate * vrtsim_state->timescale * diff / 1e9;
-    int64_t samples_to_produce = sample_index - last_sample_index;
-    shm_td_iq_channel_produce_samples(vrtsim_state->channel, samples_to_produce);
-    last_sample_index = sample_index;
+    if (sample_index > last_sample_index) {
+      int64_t samples_to_produce = sample_index - last_sample_index;
+      shm_td_iq_channel_produce_samples(vrtsim_state->channel, samples_to_produce);
+      last_sample_index = sample_index;
+    }
     usleep(1);
   }
   return 0;
