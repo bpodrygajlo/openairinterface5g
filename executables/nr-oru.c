@@ -46,6 +46,7 @@
 #define CONFIG_STRING_ORU_NUM_UL_SLOTS "num_ul_slots"
 #define CONFIG_STRING_ORU_NUM_DL_SYMBOLS "num_dl_symbols"
 #define CONFIG_STRING_ORU_NUM_UL_SYMBOLS "num_ul_symbols"
+#define CONFIG_STRING_ORU_TX_CORE "tx_core"
 
 #define HLP_ORU_TX_BW "set the TX bandwidth list per component carrier"
 #define HLP_ORU_RX_BW "set the RX bandwidth list per component carrier"
@@ -83,6 +84,7 @@
   {CONFIG_STRING_RU_TX_SUBDEV,                  NULL,                               0,    .strptr=NULL,     .defstrval="",                TYPE_STRING,       0}, \
   {CONFIG_STRING_RU_RX_SUBDEV,                  NULL,                               0,    .strptr=NULL,     .defstrval="",                TYPE_STRING,       0}, \
   {CONFIG_STRING_RU_GPIO_CONTROL,               NULL,                               0,    .strptr=NULL,     .defstrval="generic",         TYPE_STRING,       0}, \
+  {CONFIG_STRING_ORU_TX_CORE,                   "The CPU core to be used to deploy south write thread for O-RU.", 0, .iptr=NULL, .defintval=-1, TYPE_INT, 0}, \
 }
 // clang-format on
 
@@ -119,7 +121,7 @@
 // clang-format on
 
 extern void set_scs_parameters(NR_DL_FRAME_PARMS *fp, int mu, int N_RB_DL, int ssb_case);
-void tx_rf_symbols(RU_t *ru, int frame, int slot, uint64_t timestamp, int start_symbol, int num_symbols);
+int tx_rf_symbols(RU_t *ru, int frame, int slot, uint64_t timestamp, int start_symbol, int num_symbols);
 
 void prepare_prach_item(ORU_t *oru)
 {
@@ -285,6 +287,7 @@ int get_oru_options(ORU_t *oru)
   } else {
     oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_NONE;
   }
+  oru->tx_core = *gpd(param, nump, CONFIG_STRING_ORU_TX_CORE)->iptr;
 
   paramdef_t fh_param[] = CMDLINE_PARAMS_DESC_ORU_FH;
   nump = sizeofArray(fh_param);
@@ -451,8 +454,9 @@ void fft_and_cp_insertion(NR_DL_FRAME_PARMS *fp, c16_t *txdataF, c16_t *txdata, 
   }
 }
 
-static void dl_symbol_process(RU_t *ru, int frame, int slot, int symbol, c16_t **txDataF, int64_t timestamp)
+static void dl_symbol_process(ORU_t *oru, int frame, int slot, int symbol, c16_t **txDataF, int64_t timestamp, uint64_t abs_symbol)
 {
+  RU_t *ru = oru->ru;
   NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
   uint32_t slot_offset = get_samples_slot_timestamp(fp, slot);
   uint32_t symbol_offset = get_samples_symbol_timestamp(fp, slot, symbol);
@@ -474,7 +478,11 @@ static void dl_symbol_process(RU_t *ru, int frame, int slot, int symbol, c16_t *
                          slot,
                          symbol);
   }
-  tx_rf_symbols(ru, frame, slot, timestamp, symbol, 1);
+
+  pthread_mutex_lock(&oru->tx_write_mutex);
+  oru->latest_written_symbol_index = abs_symbol;
+  pthread_cond_signal(&oru->tx_write_cond);
+  pthread_mutex_unlock(&oru->tx_write_mutex);
 }
 
 static pthread_mutex_t south_read_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -538,6 +546,14 @@ void *oru_north_read_thread(void *arg)
   // Now start_timestamp points to the start sample of the frame 0 slot 0 symbol 0 of hyperframe 0
   LOG_A(PHY, "DL thread started: start_timestamp %ld, start_frame %d, start_slot %d\n", start_timestamp, start_frame, start_slot);
 
+  pthread_mutex_lock(&oru->tx_write_mutex);
+  oru->start_timestamp = start_timestamp;
+  oru->start_symbol_index = start_frame * (fp->slots_per_frame * fp->symbols_per_slot) + start_slot * fp->symbols_per_slot;
+  oru->latest_written_symbol_index = oru->start_symbol_index - 1;
+  oru->tx_write_initialized = true;
+  pthread_cond_signal(&oru->tx_write_cond);
+  pthread_mutex_unlock(&oru->tx_write_mutex);
+
   while (!oai_exit) {
     int frame = -1, slot = -1, symbol = -1;
     uint64_t hyper_frame;
@@ -555,7 +571,8 @@ void *oru_north_read_thread(void *arg)
     if (timestamp < 0) {
       continue;
     }
-    dl_symbol_process(ru, frame, slot, symbol, txDataF_ptr, timestamp);
+    uint64_t abs_symbol = num_frames * (fp->slots_per_frame * fp->symbols_per_slot) + slot * fp->symbols_per_slot + symbol;
+    dl_symbol_process(oru, frame, slot, symbol, txDataF_ptr, timestamp, abs_symbol);
     if (frame % 256 == 0 && slot == 0 && symbol == 0) {
       LOG_I(PHY, "[RU_thread] read data: frame %d, slot %d, symbol %d\n", frame, slot, symbol);
     }
@@ -709,6 +726,95 @@ static void dispatch_ul_work(ul_work_queue_t *q, ORU_t *oru, int frame, int slot
   q->count++;
   pthread_cond_signal(&q->work_available);
   pthread_mutex_unlock(&q->lock);
+}
+
+void *oru_south_write_thread(void *arg)
+{
+  ORU_t *oru = (ORU_t *)arg;
+  RU_t *ru = oru->ru;
+  NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
+
+  LOG_A(PHY, "South write thread started on core %d\n", oru->tx_core);
+
+  uint64_t total_write_calls = 0;
+  uint64_t total_symbols_sent = 0;
+  uint64_t coalesce_histogram[NR_SYMBOLS_PER_SLOT + 1] = {0}; // max coalesced is 14
+
+  pthread_mutex_lock(&oru->tx_write_mutex);
+  while (!oru->tx_write_initialized && !oai_exit) {
+    pthread_cond_wait(&oru->tx_write_cond, &oru->tx_write_mutex);
+  }
+  if (oai_exit) {
+    pthread_mutex_unlock(&oru->tx_write_mutex);
+    return NULL;
+  }
+  uint64_t next_symbol_to_send = oru->start_symbol_index;
+  pthread_mutex_unlock(&oru->tx_write_mutex);
+
+  while (!oai_exit) {
+    pthread_mutex_lock(&oru->tx_write_mutex);
+    while (oru->latest_written_symbol_index < next_symbol_to_send && !oai_exit) {
+      pthread_cond_wait(&oru->tx_write_cond, &oru->tx_write_mutex);
+    }
+    if (oai_exit) {
+      pthread_mutex_unlock(&oru->tx_write_mutex);
+      break;
+    }
+
+    uint64_t latest = oru->latest_written_symbol_index;
+    int64_t start_ts = oru->start_timestamp;
+    pthread_mutex_unlock(&oru->tx_write_mutex);
+
+    // Process all symbols from next_symbol_to_send to latest
+    while (next_symbol_to_send <= latest) {
+      int symbols_per_slot = fp->symbols_per_slot;
+      int symbols_per_frame = fp->slots_per_frame * symbols_per_slot;
+
+      uint64_t abs_frame = next_symbol_to_send / symbols_per_frame;
+      int frame = abs_frame % 1024;
+      int slot = (next_symbol_to_send % symbols_per_frame) / symbols_per_slot;
+      int symbol = next_symbol_to_send % symbols_per_slot;
+
+      // Calculate timestamp for the first symbol in this batch
+      int64_t timestamp = start_ts + abs_frame * fp->samples_per_frame + get_samples_slot_timestamp(fp, slot)
+                          + get_samples_symbol_timestamp(fp, slot, symbol);
+
+      // How many symbols can we send in the same slot?
+      // Since they are contiguous, the maximum number is up to the end of the slot
+      uint64_t remaining_in_batch = latest - next_symbol_to_send + 1;
+      int max_in_slot = symbols_per_slot - symbol;
+      int num_coalesced = (remaining_in_batch < (uint64_t)max_in_slot) ? (int)remaining_in_batch : max_in_slot;
+
+      // Send the coalesced symbols
+      int sent = tx_rf_symbols(ru, frame, slot, timestamp, symbol, num_coalesced);
+
+      if (sent > 0) {
+        total_write_calls++;
+        total_symbols_sent += sent;
+        if (sent >= 1 && sent <= NR_SYMBOLS_PER_SLOT) {
+          coalesce_histogram[sent]++;
+        }
+      }
+
+      if (total_write_calls % (NR_SYMBOLS_PER_SLOT * 1000) == 0) {
+        LOG_I(PHY, "O-RU South Write Coalescing Stats: calls=%lu, symbols=%lu, avg_coalesced=%.2f\n",
+              total_write_calls, total_symbols_sent, (double)total_symbols_sent / total_write_calls);
+        if (total_symbols_sent > total_write_calls) {
+          uint64_t c3_4 = coalesce_histogram[3] + coalesce_histogram[4];
+          uint64_t c5_6 = coalesce_histogram[5] + coalesce_histogram[6];
+          uint64_t c7_9 = coalesce_histogram[7] + coalesce_histogram[8] + coalesce_histogram[9];
+          uint64_t c10_plus = 0;
+          for (int c = 10; c <= NR_SYMBOLS_PER_SLOT; c++) c10_plus += coalesce_histogram[c];
+          LOG_I(PHY, "  Coalesced distribution: [1]:%lu, [2]:%lu, [3-4]:%lu, [5-6]:%lu, [7-9]:%lu, [10+]:%lu\n",
+                coalesce_histogram[1], coalesce_histogram[2], c3_4, c5_6, c7_9, c10_plus);
+        }
+      }
+
+      next_symbol_to_send += num_coalesced;
+    }
+  }
+
+  return NULL;
 }
 
 void *oru_south_read_thread(void *arg)

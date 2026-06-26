@@ -56,6 +56,14 @@ typedef struct {
 
   pthread_t north_read_thread;
   pthread_t south_read_thread;
+  pthread_t south_write_thread;
+  int tx_core;
+  pthread_mutex_t tx_write_mutex;
+  pthread_cond_t tx_write_cond;
+  uint64_t latest_written_symbol_index;
+  int64_t start_timestamp;
+  uint64_t start_symbol_index;
+  bool tx_write_initialized;
   oru_fh_config_t fh_config;
   void *fronthaul;
 
@@ -70,6 +78,7 @@ int get_oru_options(ORU_t *oru);
 void oru_init_frame_parms(ORU_t *oru);
 void *oru_north_read_thread(void *arg);
 void *oru_south_read_thread(void *arg);
+void *oru_south_write_thread(void *arg);
 void prepare_prach_item(ORU_t *oru);
 
 #endif

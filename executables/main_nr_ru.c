@@ -227,8 +227,14 @@ int main(int argc, char **argv)
   ret = ru->rfdevice.trx_start_func(&ru->rfdevice);
   AssertFatal(ret == 0, "RU %u: trx_start_func() ret %d: cannot start rfdevice\n", ru->idx, ret);
 
+  pthread_mutex_init(&oru.tx_write_mutex, NULL);
+  pthread_cond_init(&oru.tx_write_cond, NULL);
+  oru.latest_written_symbol_index = 0;
+  oru.tx_write_initialized = false;
+
   threadCreate(&oru.north_read_thread, oru_north_read_thread, (void *)&oru, "north_read_thread", -1, OAI_PRIORITY_RT_MAX);
   threadCreate(&oru.south_read_thread, oru_south_read_thread, (void *)&oru, "south_read_thread", -1, OAI_PRIORITY_RT_MAX);
+  threadCreate(&oru.south_write_thread, oru_south_write_thread, (void *)&oru, "south_write_thread", oru.tx_core, OAI_PRIORITY_RT_MAX);
   usleep(1000);
   oru_fh_start(oru.fronthaul);
 
@@ -240,8 +246,16 @@ int main(int argc, char **argv)
     sleep(1);
   }
 
+  pthread_mutex_lock(&oru.tx_write_mutex);
+  pthread_cond_signal(&oru.tx_write_cond);
+  pthread_mutex_unlock(&oru.tx_write_mutex);
+
   pthread_join(oru.north_read_thread, NULL);
   pthread_join(oru.south_read_thread, NULL);
+  pthread_join(oru.south_write_thread, NULL);
+
+  pthread_mutex_destroy(&oru.tx_write_mutex);
+  pthread_cond_destroy(&oru.tx_write_cond);
 
   oru_fh_stop(oru.fronthaul);
 
