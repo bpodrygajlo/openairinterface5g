@@ -272,7 +272,7 @@ static void *vrtsim_timing_job(void *arg)
       shm_td_iq_channel_produce_samples(vrtsim_state->channel, samples_to_produce);
       last_sample_index = sample_index;
     }
-    usleep(1);
+    usleep(20);
   }
   return 0;
 }
