@@ -72,6 +72,7 @@ typedef struct {
   time_stats_t rx_prach;
   time_stats_t rx;
   prach_item_t prach_item;
+  bool threequarter_fs;
 } ORU_t;
 
 int get_oru_options(ORU_t *oru);

@@ -60,6 +60,7 @@
 #define HLP_ORU_NUM_UL_SLOTS "set the number of UL Slots in TDD"
 #define HLP_ORU_NUM_DL_SYMBOLS "set the number of DL symbols in the mixed slot"
 #define HLP_ORU_NUM_UL_SYMBOLS "set the number of UL symbols in the mixed slot"
+#define HLP_ORU_THREEQUARTER_FS "set the 3/4 sampling frequency"
 
 // clang-format off
 #define CMDLINE_PARAMS_DESC_ORU \
@@ -78,6 +79,11 @@
   {CONFIG_STRING_ORU_NUM_DL_SYMBOLS,            HLP_ORU_NUM_DL_SYMBOLS,             0,    .uptr=NULL,       .defintval=7,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_NUM_UL_SYMBOLS,            HLP_ORU_NUM_UL_SYMBOLS,             0,    .uptr=NULL,       .defintval=3,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_TX_CORE,                   "The CPU core to be used to deploy south write thread for O-RU.", 0, .iptr=NULL, .defintval=-1, TYPE_INT, 0}, \
+}
+
+#define CMDLINE_PARAMS_DESC_ORU_COMMON \
+{ \
+  {"E", "set the 3/4 sampling frequency",  PARAMFLAG_BOOL, .iptr=NULL, .defintval=0, TYPE_INT,    0}, \
 }
 // clang-format on
 
@@ -284,6 +290,11 @@ int get_oru_options(ORU_t *oru)
   int num_slots_period = num_slots_frame / num_period_frame;
   tdd_pattern->tdd_pattern_length_slots = num_slots_period;
 
+  paramdef_t common_param[] = CMDLINE_PARAMS_DESC_ORU_COMMON;
+  nump = sizeofArray(common_param);
+  ret = config_get(config_get_if(), common_param, nump, NULL);
+  oru->threequarter_fs = *gpd(common_param, nump, "E")->iptr;
+
   return 0;
 }
 
@@ -301,6 +312,7 @@ void oru_init_frame_parms(ORU_t *oru)
   fp->N_RB_UL = oru->bw_rx[0];
   ru->config.carrier_config.ul_grid_size[ru->config.ssb_config.scs_common.value].value = oru->bw_rx[0];
   fp->numerology_index = ru->numerology;
+  fp->threequarter_fs = oru->threequarter_fs;
   LOG_I(NR_PHY,
         "Set RU frame type to %s, N_RB_DL %d, N_RB_UL %d, mu %d\n",
         oru->frame_type == TDD ? "TDD" : "FDD",
