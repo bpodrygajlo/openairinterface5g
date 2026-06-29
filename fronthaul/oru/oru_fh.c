@@ -258,6 +258,12 @@ int oru_fh_get_utc_anchor_point(void *handle, uint64_t *hyper_frame, uint32_t *f
   uint64_t leftover_syms = absolute_gps_symbol % total_syms_per_sec;
   ts->tv_sec = (absolute_gps_symbol / total_syms_per_sec) + GPS_EPOCH_OFFSET_UNIX - GPS_LEAP_SECONDS;
   ts->tv_nsec = leftover_syms * ns_per_symbol;
+
+  ts->tv_nsec += ns_per_symbol * 14;
+  if (ts->tv_nsec >= 1000000000) {
+    ts->tv_sec += 1;
+    ts->tv_nsec -= 1000000000;
+  }
   return 0;
 }
 

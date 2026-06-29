@@ -45,8 +45,8 @@ elseif(NOT xran_FOUND AND xran_DOWNLOAD)
   set(xran_DIR "${CMAKE_BINARY_DIR}/.deps/src/extern_xran/fhi_lib/lib")
   ExternalProject_Add(extern_xran
       PREFIX ${CMAKE_BINARY_DIR}/.deps
-      GIT_REPOSITORY https://github.com/openairinterface/o-du-phy.git
-      GIT_TAG ${K_VERSION}
+      GIT_REPOSITORY https://github.com/NUS-CIR/o-du-phy-rel-k.git
+      GIT_TAG 5fdb39c409645cdeb04bdf9e0b6b74901a14b11a
       CONFIGURE_COMMAND ""  # nothing to configure
       BUILD_COMMAND cd fhi_lib/lib && WIRELESS_SDK_TOOLCHAIN=gcc RTE_SDK=${dpdk_PREFIX} XRAN_DIR=.. make XRAN_LIB_SO=1
       BUILD_IN_SOURCE ON
