@@ -21,7 +21,6 @@
 #include "common/config/config_userapi.h"
 #include "common/utils/system.h"
 #include "nr-oru.h"
-#include "openair2/ENB_APP/enb_paramdef.h"
 #include "openair1/PHY/defs_nr_common.h"
 #include "PHY/NR_TRANSPORT/nr_transport_proto.h"
 #include "oru_packet_processor.h"
@@ -78,12 +77,6 @@
   {CONFIG_STRING_ORU_NUM_UL_SLOTS,              HLP_ORU_NUM_UL_SLOTS,               0,    .uptr=NULL,       .defintval=1,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_NUM_DL_SYMBOLS,            HLP_ORU_NUM_DL_SYMBOLS,             0,    .uptr=NULL,       .defintval=7,                 TYPE_UINT,         0}, \
   {CONFIG_STRING_ORU_NUM_UL_SYMBOLS,            HLP_ORU_NUM_UL_SYMBOLS,             0,    .uptr=NULL,       .defintval=3,                 TYPE_UINT,         0}, \
-  {CONFIG_STRING_RU_SDR_ADDRS,                  NULL,                               0,    .strptr=NULL,     .defstrval="type=b200",       TYPE_STRING,       0}, \
-  {CONFIG_STRING_RU_SDR_CLK_SRC,                NULL,                               0,    .strptr=NULL,     .defstrval="internal",        TYPE_STRING,       0}, \
-  {CONFIG_STRING_RU_SDR_TME_SRC,                NULL,                               0,    .strptr=NULL,     .defstrval="internal",        TYPE_STRING,       0}, \
-  {CONFIG_STRING_RU_TX_SUBDEV,                  NULL,                               0,    .strptr=NULL,     .defstrval="",                TYPE_STRING,       0}, \
-  {CONFIG_STRING_RU_RX_SUBDEV,                  NULL,                               0,    .strptr=NULL,     .defstrval="",                TYPE_STRING,       0}, \
-  {CONFIG_STRING_RU_GPIO_CONTROL,               NULL,                               0,    .strptr=NULL,     .defstrval="generic",         TYPE_STRING,       0}, \
   {CONFIG_STRING_ORU_TX_CORE,                   "The CPU core to be used to deploy south write thread for O-RU.", 0, .iptr=NULL, .defintval=-1, TYPE_INT, 0}, \
 }
 // clang-format on
@@ -230,63 +223,6 @@ int get_oru_options(ORU_t *oru)
   oru->num_UL_slots = *gpd(param, nump, CONFIG_STRING_ORU_NUM_UL_SLOTS)->iptr;
   oru->num_DL_symbols = *gpd(param, nump, CONFIG_STRING_ORU_NUM_DL_SYMBOLS)->iptr;
   oru->num_UL_symbols = *gpd(param, nump, CONFIG_STRING_ORU_NUM_UL_SYMBOLS)->iptr;
-
-  const paramdef_t *sdr_addrs_param = gpd(param, nump, CONFIG_STRING_RU_SDR_ADDRS);
-  if (sdr_addrs_param && sdr_addrs_param->strptr && *sdr_addrs_param->strptr) {
-    oru->ru->openair0_cfg.sdr_addrs = strdup(*sdr_addrs_param->strptr);
-  }
-
-  const paramdef_t *tx_subdev_param = gpd(param, nump, CONFIG_STRING_RU_TX_SUBDEV);
-  if (tx_subdev_param && tx_subdev_param->strptr && *tx_subdev_param->strptr) {
-    oru->ru->openair0_cfg.tx_subdev = strdup(*tx_subdev_param->strptr);
-  }
-
-  const paramdef_t *rx_subdev_param = gpd(param, nump, CONFIG_STRING_RU_RX_SUBDEV);
-  if (rx_subdev_param && rx_subdev_param->strptr && *rx_subdev_param->strptr) {
-    oru->ru->openair0_cfg.rx_subdev = strdup(*rx_subdev_param->strptr);
-  }
-
-  const paramdef_t *clock_src_param = gpd(param, nump, CONFIG_STRING_RU_SDR_CLK_SRC);
-  if (clock_src_param && clock_src_param->strptr && *clock_src_param->strptr) {
-    char *str = *clock_src_param->strptr;
-    if (strcmp(str, "internal") == 0) {
-      oru->ru->openair0_cfg.clock_source = internal;
-    } else if (strcmp(str, "external") == 0) {
-      oru->ru->openair0_cfg.clock_source = external;
-    } else if (strcmp(str, "gpsdo") == 0) {
-      oru->ru->openair0_cfg.clock_source = gpsdo;
-    }
-  } else {
-    oru->ru->openair0_cfg.clock_source = internal;
-  }
-
-  const paramdef_t *time_src_param = gpd(param, nump, CONFIG_STRING_RU_SDR_TME_SRC);
-  if (time_src_param && time_src_param->strptr && *time_src_param->strptr) {
-    char *str = *time_src_param->strptr;
-    if (strcmp(str, "internal") == 0) {
-      oru->ru->openair0_cfg.time_source = internal;
-    } else if (strcmp(str, "external") == 0) {
-      oru->ru->openair0_cfg.time_source = external;
-    } else if (strcmp(str, "gpsdo") == 0) {
-      oru->ru->openair0_cfg.time_source = gpsdo;
-    }
-  } else {
-    oru->ru->openair0_cfg.time_source = internal;
-  }
-
-  const paramdef_t *gpio_control_param = gpd(param, nump, CONFIG_STRING_RU_GPIO_CONTROL);
-  if (gpio_control_param && gpio_control_param->strptr && *gpio_control_param->strptr) {
-    char *str = *gpio_control_param->strptr;
-    if (strcmp(str, "generic") == 0) {
-      oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_GENERIC;
-    } else if (strcmp(str, "interdigital") == 0) {
-      oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_INTERDIGITAL;
-    } else {
-      oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_NONE;
-    }
-  } else {
-    oru->ru->openair0_cfg.gpio_controller = RU_GPIO_CONTROL_NONE;
-  }
   oru->tx_core = *gpd(param, nump, CONFIG_STRING_ORU_TX_CORE)->iptr;
 
   paramdef_t fh_param[] = CMDLINE_PARAMS_DESC_ORU_FH;
