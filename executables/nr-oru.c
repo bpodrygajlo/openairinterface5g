@@ -727,6 +727,11 @@ void *oru_south_write_thread(void *arg)
       int64_t timestamp = start_ts + abs_frame * fp->samples_per_frame + get_samples_slot_timestamp(fp, slot)
                           + get_samples_symbol_timestamp(fp, slot, symbol);
 
+      if (timestamp < 0) {
+        next_symbol_to_send++;
+        continue;
+      }
+
       // How many symbols can we send in the same slot?
       // Since they are contiguous, the maximum number is up to the end of the slot
       uint64_t remaining_in_batch = latest - next_symbol_to_send + 1;
