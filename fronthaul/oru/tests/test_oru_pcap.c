@@ -331,6 +331,19 @@ static void ref_check_dl_iq(uint32_t **txdataF, int frame, int slot, int symbol)
   }
 }
 
+// Places each stream's IQ verbatim at its PRB offset on its antenna, the way read_dl_iq() used to
+// fill txdataF - no rotation or weighting, so ref_check_dl_iq() can compare bit-exactly.
+static void place_dl_streams(uint32_t **txdataF, const dl_iq_stream_t *streams, int num_streams)
+{
+  for (int a = 0; a < MAX_ANTENNAS; a++)
+    memset(txdataF[a], 0, 273 * 12 * sizeof(uint32_t));
+  for (int i = 0; i < num_streams; i++) {
+    const dl_iq_stream_t *st = &streams[i];
+    if (st->ant_id < MAX_ANTENNAS)
+      memcpy(&txdataF[st->ant_id][st->start_prb * 12], st->iq, st->num_prb * 12 * sizeof(uint32_t));
+  }
+}
+
 // Returns true if the reference capture passed: all packets as generated, all expected messages present,
 // and the processor's DL IQ equal to what was sent
 static bool ref_report(uint64_t exp_c, uint64_t exp_u)
@@ -499,6 +512,10 @@ int main(int argc, char *argv[])
   for (int i = 0; i < MAX_ANTENNAS; i++)
     txdataF[i] = malloc(273 * 12 * sizeof(uint32_t));
 
+  static dl_iq_stream_t dl_streams[MAX_DL_FRAGMENTS_PER_SYMBOL];
+  static uint32_t *dl_iq_arena = NULL;
+  dl_iq_arena = malloc(DL_IQ_ARENA_PRBS(273) * 12 * sizeof(uint32_t));
+
   while (pcap_next_ex(pcap, &pkthdr, &packet) >= 0) {
     pkt_count++;
     double ts = pkthdr->ts.tv_sec + pkthdr->ts.tv_usec / 1000000.0;
@@ -572,9 +589,11 @@ int main(int argc, char *argv[])
             int f, sl, sy;
             uint64_t hf;
             while (get_ready_job_count(ctx) > 0) {
-              read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &hf, &f, &sl, &sy);
-              if (ext1_reference)
+              int n = read_dl_iq_streams(ctx, dl_streams, dl_iq_arena, MAX_DL_FRAGMENTS_PER_SYMBOL, &hf, &f, &sl, &sy);
+              if (ext1_reference) {
+                place_dl_streams(txdataF, dl_streams, n);
                 ref_check_dl_iq(txdataF, f, sl, sy);
+              }
             }
           }
           last_tick_sym = current_sym;
@@ -602,9 +621,11 @@ int main(int argc, char *argv[])
     int f, sl, sy;
     uint64_t hf;
     while (get_ready_job_count(ctx) > 0) {
-      read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &hf, &f, &sl, &sy);
-      if (ext1_reference)
+      int n = read_dl_iq_streams(ctx, dl_streams, dl_iq_arena, MAX_DL_FRAGMENTS_PER_SYMBOL, &hf, &f, &sl, &sy);
+      if (ext1_reference) {
+        place_dl_streams(txdataF, dl_streams, n);
         ref_check_dl_iq(txdataF, f, sl, sy);
+      }
     }
   }
 
@@ -641,6 +662,7 @@ int main(int argc, char *argv[])
     rte_mempool_free(mp);
   for (int i = 0; i < MAX_ANTENNAS; i++)
     free(txdataF[i]);
+  free(dl_iq_arena);
 
   if (stats.cplane_err_sect_ext != 0) {
     printf("FAIL: %lu malformed section extension(s)\n", stats.cplane_err_sect_ext);
