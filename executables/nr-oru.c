@@ -326,25 +326,23 @@ void oru_init_frame_parms(ORU_t *oru)
     for (int n = 0; n < numb_slots_frame; n++) {
       int s = 0;
       int p = n % numb_slots_period;
+      nfapi_nr_max_tdd_periodicity_t *periodicity = &ru->config.tdd_table.max_tdd_periodicity_list[n];
+      periodicity->max_num_of_symbol_per_slot_list =
+          malloc(sizeof(*periodicity->max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
+      nfapi_nr_max_num_of_symbol_per_slot_t *symbol_list = periodicity->max_num_of_symbol_per_slot_list;
       if (p < oru->num_DL_slots) {
-        ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list =
-            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
         for (s = 0; s < 14; s++)
-          ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 0;
+          symbol_list[s].slot_config.value = 0;
       } else if (p == oru->num_DL_slots) {
-        ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list =
-            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
         for (s = 0; s < oru->num_DL_symbols; s++)
-          ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 0;
+          symbol_list[s].slot_config.value = 0;
         for (; s < NR_SYMBOLS_PER_SLOT - oru->num_UL_symbols; s++)
-          ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 2;
+          symbol_list[s].slot_config.value = 2;
         for (; s < NR_SYMBOLS_PER_SLOT; s++)
-          ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 1;
+          symbol_list[s].slot_config.value = 1;
       } else {
-        ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list =
-            malloc(sizeof(*ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list) * NR_SYMBOLS_PER_SLOT);
         for (s = 0; s < NR_SYMBOLS_PER_SLOT; s++)
-          ru->config.tdd_table.max_tdd_periodicity_list[n].max_num_of_symbol_per_slot_list[s].slot_config.value = 1;
+          symbol_list[s].slot_config.value = 1;
       }
     }
   }
@@ -352,23 +350,19 @@ void oru_init_frame_parms(ORU_t *oru)
 
 void fft_and_cp_insertion(NR_DL_FRAME_PARMS *fp, c16_t *txdataF, c16_t *txdata, int slot, int symbol)
 {
-  if (fp->Ncp == 1) {
-    PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples, CYCLIC_PREFIX);
-  } else {
+  int nb_prefix_samples = fp->nb_prefix_samples;
+  if (fp->Ncp != 1) {
     if (fp->numerology_index != 0) {
       if (!(slot % (fp->slots_per_subframe / 2)) && (symbol == 0)) {
-        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples0, CYCLIC_PREFIX);
-      } else {
-        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples, CYCLIC_PREFIX);
+        nb_prefix_samples = fp->nb_prefix_samples0;
       }
     } else {
-      if (symbol % 0x7) {
-        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples, CYCLIC_PREFIX);
-      } else {
-        PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, fp->nb_prefix_samples0, CYCLIC_PREFIX);
+      if (symbol % 0x7 == 0) {
+        nb_prefix_samples = fp->nb_prefix_samples0;
       }
     }
   }
+  PHY_ofdm_mod((int *)txdataF, (int *)txdata, fp->ofdm_symbol_size, 1, nb_prefix_samples, CYCLIC_PREFIX);
 }
 
 static void dl_symbol_process(RU_t *ru, int frame, int slot, int symbol, c16_t **txDataF, int64_t timestamp)
