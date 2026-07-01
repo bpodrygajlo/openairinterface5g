@@ -147,19 +147,6 @@ int openair0_transport_load(openair0_device_t *device, openair0_config_t *openai
   return rc;
 }
 
-int openair0_load(openair0_device_t *device, char *name, openair0_config_t *openair0_cfg, eth_params_t *eth_params)
-{
-  loader_shlibfunc_t shlib_fdesc[1];
-  int ret = 0;
-
-  shlib_fdesc[0].fname = eth_params == NULL ? "device_init" : "transport_init";
-
-  ret = load_module_shlib(name, shlib_fdesc, 1, NULL);
-  AssertFatal((ret >= 0), "Library %s couldn't be loaded\n", name);
-
-  return ((devfunc_t)shlib_fdesc[0].fptr)(device, openair0_cfg, eth_params);
-}
-
 static void writerEnqueue(re_order_t *ctx, openair0_timestamp_t timestamp, void **txp, int nsamps, int nbAnt, int flags)
 {
   pthread_mutex_lock(&ctx->mutex_store);
