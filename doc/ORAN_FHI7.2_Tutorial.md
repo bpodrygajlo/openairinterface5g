@@ -421,7 +421,7 @@ git apply ~/openairinterface5g/cmake_targets/tools/oran_fhi_integration_patches/
 ```bash
 git clone https://github.com/openairinterface/o-du-phy.git ~/phy
 cd ~/phy
-git checkout 11.1.1 # the tag points to the `main` branch which has all patches applied that are relevant for OAI integration; the tag matches the value of cmake variable `K_VERSION`
+git checkout 11.1.2 # the tag points to the `main` branch which has all patches applied that are relevant for OAI integration; the tag matches the value of cmake variable `K_VERSION`
 ```
 or use `xran_DOWNLOAD` option when compiling OAI gNB.
 
@@ -1259,7 +1259,7 @@ The OAI configuration file [`gnb.sa.band78.106prb.fhi72.1x1-proto-ru.conf`](../t
 First, compile the RU as outlined in the [building ProtO-RU tutorial](https://github.com/NUS-CIR/ProtO-RU/tree/proto-ru?tab=readme-ov-file#building-proto-ru).
 Then, ensure that both your DU and ProtO-RU host are PTP synchronized.
 
-Next, use the RU config, [protoru-OAI-B210-TDD-n78-40MHz-1x1-30kHz.yml](https://github.com/NUS-CIR/ProtO-RU/blob/proto-ru/proto-ru/conf-files/protoru-OAI-B210-TDD-n78-40MHz-1x1-30kHz.yml), which corresponds to the above mentioned DU config file. 
+Next, use the RU config, [protoru-OAI-B210-TDD-n78-40MHz-1x1-30kHz.yml](https://github.com/NUS-CIR/ProtO-RU/blob/proto-ru/proto-ru/conf-files/protoru-OAI-B210-TDD-n78-40MHz-1x1-30kHz.yml), which corresponds to the above mentioned DU config file. Please note that the RU delay profile might need to be adjusted according to the setup. The E2E test with xran K release required `T2a_max_cp_ul: 2985`.
 In addition, please adapt the DU MAC address and VLAN tag to your needs.
 
 ProtO-RU was successfully tested with USRP B210.
