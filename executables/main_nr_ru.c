@@ -36,12 +36,7 @@ int emulate_rf = 0;
 
 RAN_CONTEXT_t RC;
 
-extern void kill_NR_RU_proc(int inst);
-extern void set_function_spec_param(RU_t *ru);
-extern void start_NR_RU();
-extern void init_NR_RU(configmodule_interface_t *cfg, char *);
-void fill_rf_config(RU_t *ru, char *rf_config_file);
-void fill_split7_2_config(split7_config_t *split7, const nfapi_nr_config_request_scf_t *config, const NR_DL_FRAME_PARMS *fp);
+
 
 int64_t uplink_frequency_offset[MAX_NUM_CCs][4];
 

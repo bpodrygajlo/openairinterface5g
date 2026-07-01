@@ -64,4 +64,6 @@ void init_eNB_afterRU(void);
 
 void init_pdcp(void);
 
+void fill_rf_config(RU_t *ru, char *rf_config_file);
+
 #endif
