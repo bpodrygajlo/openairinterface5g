@@ -440,7 +440,20 @@ typedef struct PHY_VARS_NR_UE_s {
   Actor_t *ul_actors;
   pthread_t main_thread;
   pthread_t stat_thread;
+  // Per-DL-actor pre-allocated PDSCH scratch buffers (avoids per-slot heap allocation races)
+  struct pdsch_scratch_s {
+    c16_t   *rxdataF_comp;          // [NR_SYMBOLS_PER_SLOT][NR_MAX_NB_LAYERS][rx_size_max]
+    c16_t   *dl_ch_mag;             // [NR_SYMBOLS_PER_SLOT][NR_MAX_NB_LAYERS][rx_size_max]
+    c16_t   *dl_ch_magb;            // [NR_SYMBOLS_PER_SLOT][NR_MAX_NB_LAYERS][rx_size_max]
+    c16_t   *dl_ch_magr;            // [NR_SYMBOLS_PER_SLOT][NR_MAX_NB_LAYERS][rx_size_max]
+    c16_t   *rho_dl;                // [NR_SYMBOLS_PER_SLOT][NR_MAX_NB_LAYERS*NR_MAX_NB_LAYERS][rx_size_max]
+    int32_t *pdsch_dl_ch_estimates; // [nb_antennas_rx*NR_MAX_NB_LAYERS][pdsch_est_size]
+    uint32_t rx_size_max;
+    uint32_t pdsch_est_size;
+  } *pdsch_scratch;
+  int pdsch_num_actors;
 } PHY_VARS_NR_UE;
+typedef struct pdsch_scratch_s pdsch_scratch_t;
 
 typedef struct {
   openair0_timestamp_t timestamp_tx;

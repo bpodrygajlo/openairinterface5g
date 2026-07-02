@@ -261,6 +261,26 @@ int init_nr_ue_signal(PHY_VARS_NR_UE *ue, int nb_connected_gNB)
   if (IS_SA_MODE(get_softmodem_params()))
     ue->received_config_request = false;
 
+  // Pre-allocate per-DL-actor PDSCH scratch buffers (one set per actor to avoid races)
+  const int num_actors = get_nrUE_params()->num_dl_actors > 0 ? get_nrUE_params()->num_dl_actors : 1;
+  const uint32_t rx_size_max = (fp->N_RB_DL * NR_NB_SC_PER_RB + 15) & ~15;
+  const uint32_t pdsch_est_size = ((fp->symbols_per_slot * fp->ofdm_symbol_size + 15) / 16) * 16;
+  const size_t comp_elems = (size_t)NR_SYMBOLS_PER_SLOT * NR_MAX_NB_LAYERS * rx_size_max;
+  const size_t rho_elems  = (size_t)NR_SYMBOLS_PER_SLOT * NR_MAX_NB_LAYERS * NR_MAX_NB_LAYERS * rx_size_max;
+  const size_t ch_est_elems = (size_t)fp->nb_antennas_rx * NR_MAX_NB_LAYERS * pdsch_est_size;
+  ue->pdsch_num_actors = num_actors;
+  ue->pdsch_scratch = calloc_or_fail(num_actors, sizeof(*ue->pdsch_scratch));
+  for (int i = 0; i < num_actors; i++) {
+    ue->pdsch_scratch[i].rx_size_max           = rx_size_max;
+    ue->pdsch_scratch[i].pdsch_est_size        = pdsch_est_size;
+    ue->pdsch_scratch[i].rxdataF_comp          = malloc16_clear(comp_elems   * sizeof(c16_t));
+    ue->pdsch_scratch[i].dl_ch_mag             = malloc16_clear(comp_elems   * sizeof(c16_t));
+    ue->pdsch_scratch[i].dl_ch_magb            = malloc16_clear(comp_elems   * sizeof(c16_t));
+    ue->pdsch_scratch[i].dl_ch_magr            = malloc16_clear(comp_elems   * sizeof(c16_t));
+    ue->pdsch_scratch[i].rho_dl                = malloc16_clear(rho_elems    * sizeof(c16_t));
+    ue->pdsch_scratch[i].pdsch_dl_ch_estimates = malloc16_clear(ch_est_elems * sizeof(int32_t));
+  }
+
   return 0;
 }
 
@@ -317,6 +337,16 @@ void term_nr_ue_signal(PHY_VARS_NR_UE *ue)
   }
 
   sl_ue_free(ue);
+
+  for (int i = 0; i < ue->pdsch_num_actors; i++) {
+    free_and_zero(ue->pdsch_scratch[i].rxdataF_comp);
+    free_and_zero(ue->pdsch_scratch[i].dl_ch_mag);
+    free_and_zero(ue->pdsch_scratch[i].dl_ch_magb);
+    free_and_zero(ue->pdsch_scratch[i].dl_ch_magr);
+    free_and_zero(ue->pdsch_scratch[i].rho_dl);
+    free_and_zero(ue->pdsch_scratch[i].pdsch_dl_ch_estimates);
+  }
+  free_and_zero(ue->pdsch_scratch);
 }
 
 void free_nr_ue_dl_harq(NR_DL_UE_HARQ_t harq_list[2][NR_MAX_HARQ_PROCESSES], int number_of_processes, int num_rb)

@@ -1343,9 +1343,9 @@ void nr_pdsch_channel_estimation(PHY_VARS_NR_UE *ue,
 void nr_pdsch_ptrs_processing(int nbRx,
                               c16_t ptrs_phase_per_slot[][14],
                               int32_t ptrs_re_per_slot[][14],
-                              uint32_t rx_size_symbol,
+                              uint32_t rx_size_max,
                               int nl,
-                              c16_t rxdataF_comp[][nl][rx_size_symbol],
+                              c16_t rxdataF_comp[][NR_MAX_NB_LAYERS][rx_size_max],
                               NR_DL_FRAME_PARMS *frame_parms,
                               fapi_nr_dl_config_dlsch_pdu_rel15_t *dlsch_config,
                               uint8_t nr_slot_rx,
@@ -1424,7 +1424,7 @@ void nr_pdsch_ptrs_processing(int nbRx,
       }
 #ifdef DEBUG_DL_PTRS
       LOG_M("ptrsEst.m","est", ptrs_phase_per_slot[aarx], frame_parms->symbols_per_slot, 1, 1);
-      LOG_M("rxdataF_bf_ptrs_comp.m", "bf_ptrs_cmp", rxdataF_comp[0][aarx] + startSymbIndex * rx_size_symbol, rx_size_symbol * nbSymb, 1, 1);
+      LOG_M("rxdataF_bf_ptrs_comp.m", "bf_ptrs_cmp", rxdataF_comp[0][aarx] + startSymbIndex * rx_size_max, rx_size_max * nbSymb, 1, 1);
 #endif
       /*------------------------------------------------------------------------------------------------------- */
       /* 3) Compensated DMRS based estimated signal with PTRS estimation                                        */

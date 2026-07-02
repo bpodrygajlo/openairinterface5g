@@ -247,6 +247,7 @@ static void inner_rx(PHY_VARS_gNB *gNB,
     memset(&pusch_vars->rxdataF_comp[i][symbol * buffer_length], 0, sizeof(int32_t) * buffer_length);
 
   nr_channel_compensation(buffer_length,
+                          buffer_length,
                           nb_rx_ant,
                           nb_layer,
                           rxFext,
@@ -298,6 +299,7 @@ static void inner_rx(PHY_VARS_gNB *gNB,
     }
     else {
       nr_mmse_2layers(pusch_vars->rxdataF_comp,
+                      buffer_length,
                       buffer_length,
                       nb_rx_ant,
                       nb_layer,
