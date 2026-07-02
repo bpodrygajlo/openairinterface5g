@@ -27,7 +27,6 @@ RUN apt-get update && \
 
 RUN rm -Rf /oai-ran
 WORKDIR /oai-ran
-COPY . .
 
 ## Download and build DPDK
 RUN wget --no-verbose http://fast.dpdk.org/rel/dpdk-24.11.4.tar.xz && \
@@ -53,6 +52,8 @@ RUN git clone https://git.gitlab.arm.com/networking/ral.git /opt/ral && \
     cmake -GNinja -DBUILD_SHARED_LIBS=On /opt/ral/ && \
     ninja && \
     ninja install
+
+COPY . .
 
 FROM ran-base AS ran-build-fhi72
 ## Build and install OAI
