@@ -1249,6 +1249,109 @@ void test_hyper_frame_calculation()
   printf("Hyper-frame calculation test passed!\n");
 }
 
+void test_large_delay_profile()
+{
+  printf("Testing large delay profile (up to 10 slots lookahead)...\n");
+  int mu = 1; // 30kHz, slot duration = 500 uS, symbol duration = 35.71 uS
+  // 10 slots = 140 symbols = 5000 uS.
+  // We configure T2a_cp_max = 5000 uS (140 symbols) and T2a_up_max = 5000 uS (140 symbols)
+  // Let's set T2a_cp_min = 200 uS, T2a_cp_max = 5000 uS, T2a_up_min = 100 uS, T2a_up_max = 5000 uS.
+  void *ctx = init_packet_processor(mu, 273, 200, 5000, 100, 5000, 2, 2, 0, 0, 5, test_alloc_mbuf, test_send_mbuf, NULL, 1500, 0);
+  assert(ctx != NULL);
+
+  uint64_t current_sym = 1000;
+  handle_absolute_symbol_tick(ctx, current_sym);
+
+  // Target symbol is 135 symbols in the future (within the 10 slots / 140 symbols limit)
+  uint64_t target_sym = current_sym + 135;
+
+  // 1. Send C-plane packet for target_sym
+  struct rte_mbuf *c_mbuf = rte_pktmbuf_alloc(mp);
+  struct xran_ecpri_hdr *ecpri = (struct xran_ecpri_hdr *)rte_pktmbuf_append(c_mbuf, sizeof(struct xran_ecpri_hdr));
+  ecpri->ecpri_xtc_id = xran_compose_cid(&g_eaxcid_config, 0, 0, 0, 0);
+
+  struct xran_cp_radioapp_section1_header *apphdr =
+      (struct xran_cp_radioapp_section1_header *)rte_pktmbuf_append(c_mbuf, sizeof(struct xran_cp_radioapp_section1_header));
+  memset(apphdr, 0, sizeof(*apphdr));
+  apphdr->cmnhdr.field.dataDirection = XRAN_DIR_DL;
+  apphdr->cmnhdr.field.payloadVer = XRAN_PAYLOAD_VER;
+
+  int slots_per_subframe = 1 << mu;
+  int num_symbols_per_frame = 10 * slots_per_subframe * 14;
+  apphdr->cmnhdr.field.frameId = (target_sym / num_symbols_per_frame) % 256;
+  int slot_in_frame = (target_sym % num_symbols_per_frame) / 14;
+  apphdr->cmnhdr.field.subframeId = slot_in_frame / slots_per_subframe;
+  apphdr->cmnhdr.field.slotId = slot_in_frame % slots_per_subframe;
+  apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
+  apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
+
+  struct xran_cp_radioapp_section1 *sec =
+      (struct xran_cp_radioapp_section1 *)rte_pktmbuf_append(c_mbuf, sizeof(struct xran_cp_radioapp_section1));
+  memset(sec, 0, sizeof(*sec));
+  sec->hdr.u.s1.numSymbol = 1;
+  sec->hdr.u1.common.numPrbc = 1;
+  *((uint64_t *)sec) = rte_be_to_cpu_64(*((uint64_t *)sec));
+
+  handle_cplane_packet(ctx, c_mbuf);
+
+  oru_packet_processor_stats_t stats;
+  get_packet_processor_stats(ctx, &stats);
+  assert(stats.cplane_err_early == 0);
+  assert(stats.cplane_err_late == 0);
+  assert(stats.total_cplane == 1);
+
+  // 2. Send U-plane packet for target_sym
+  struct rte_mbuf *u_mbuf = rte_pktmbuf_alloc(mp);
+  struct xran_ecpri_hdr *u_ecpri = (struct xran_ecpri_hdr *)rte_pktmbuf_append(u_mbuf, sizeof(struct xran_ecpri_hdr));
+  u_ecpri->ecpri_xtc_id = xran_compose_cid(&g_eaxcid_config, 0, 0, 0, 0);
+
+  struct radio_app_common_hdr *u_app =
+      (struct radio_app_common_hdr *)rte_pktmbuf_append(u_mbuf, sizeof(struct radio_app_common_hdr));
+  u_app->frame_id = (target_sym / num_symbols_per_frame) % 256;
+  u_app->sf_slot_sym.subframe_id = slot_in_frame / slots_per_subframe;
+  u_app->sf_slot_sym.slot_id = slot_in_frame % slots_per_subframe;
+  u_app->sf_slot_sym.symb_id = target_sym % 14;
+  u_app->sf_slot_sym.value = rte_cpu_to_be_16(u_app->sf_slot_sym.value);
+
+  struct data_section_hdr *u_data = (struct data_section_hdr *)rte_pktmbuf_append(u_mbuf, sizeof(struct data_section_hdr));
+  u_data->fields.num_prbu = 1;
+  u_data->fields.start_prbu = 0;
+  u_data->fields.sect_id = 0;
+  u_data->fields.all_bits = rte_cpu_to_be_32(u_data->fields.all_bits);
+
+  // IQ Data
+  uint16_t *iq = (uint16_t *)rte_pktmbuf_append(u_mbuf, 1 * 12 * 4);
+  assert(iq != NULL);
+  iq[0] = 0x1111;
+
+  handle_uplane_packet(ctx, u_mbuf);
+
+  get_packet_processor_stats(ctx, &stats);
+  assert(stats.uplane_err_early == 0);
+  assert(stats.uplane_err_late == 0);
+
+  // 3. Advance to trigger window expiry and job completion
+  current_sym = target_sym;
+  handle_absolute_symbol_tick(ctx, current_sym);
+
+  uint32_t *txdataF[1] = {0};
+  uint32_t output_iq[273 * 12] = {0};
+  txdataF[0] = output_iq;
+
+  int frame, slot, symbol;
+  uint64_t hyper_frame = 0;
+  do {
+    read_dl_iq(ctx, txdataF, 1, &hyper_frame, &frame, &slot, &symbol);
+  } while (!(frame == (target_sym / num_symbols_per_frame) % 1024 && symbol == target_sym % 14));
+
+  uint16_t *out_iq = (uint16_t *)output_iq;
+  assert(out_iq[0] == 0x1111);
+
+  cleanup_packet_processor(ctx);
+  printf("Large delay profile test passed!\n");
+}
+
 int main(int argc, char **argv)
 {
   setup_dpdk(argc, argv);
@@ -1276,6 +1379,8 @@ int main(int argc, char **argv)
   test_prach_generation();
   usleep(10000);
   test_hyper_frame_calculation();
+  usleep(10000);
+  test_large_delay_profile();
   usleep(10000);
 
   printf("All tests passed!\n");

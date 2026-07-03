@@ -30,8 +30,8 @@
     }                                                                                     \
   } while (0)
 
-#define DL_JOB_RING_SIZE 128
-#define UL_JOB_RING_SIZE 128
+#define DL_JOB_RING_SIZE 1024
+#define UL_JOB_RING_SIZE 1024
 #define MAX_CONCURRENT_DL_JOBS (DL_JOB_RING_SIZE - 1)
 #define NUM_CONCURRENT_DL_SYMBOL_WINDOWS MAX_CONCURRENT_DL_JOBS
 #define NUM_CONCURRENT_UL_SYMBOL_WINDOWS 128
@@ -368,12 +368,14 @@ void handle_uplane_packet(void *context, void *pkt)
   int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * slots_per_subframe * NR_SYMBOLS_PER_SLOT;
   uint32_t current_symbol_in_frame = ctx->current_absolute_symbol % num_symbols_per_frame;
   int symbol_in_frame = NR_SYMBOLS_PER_SLOT * (slot_id + subframe_id * slots_per_subframe) + symb_id;
-  int32_t diff = symbol_in_frame - current_symbol_in_frame;
-  if (diff < -num_symbols_per_frame / 2) {
-    diff += num_symbols_per_frame;
-  } else if (diff > num_symbols_per_frame / 2) {
-    diff -= num_symbols_per_frame;
+  uint8_t current_frame_id = (ctx->current_absolute_symbol / num_symbols_per_frame) % 256;
+  int frame_diff = (int)frame_id - (int)current_frame_id;
+  if (frame_diff < -128) {
+    frame_diff += 256;
+  } else if (frame_diff > 127) {
+    frame_diff -= 256;
   }
+  int32_t diff = frame_diff * num_symbols_per_frame + symbol_in_frame - (int32_t)current_symbol_in_frame;
   txrx_window_histogram_count(&ctx->stats.dl_uplane_hist, diff);
   if (diff > (int32_t)ctx->T2a_max_up_dl_sym_diff) {
     ctx->stats.uplane_err_early++;
@@ -436,12 +438,14 @@ static void handle_dl_cplane_packet(oru_packet_processor_context_t *ctx,
   int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << numerology) * NR_SYMBOLS_PER_SLOT;
   uint64_t symbol_in_frame = slot_in_frame * 14 + start_symbol;
   uint32_t current_symbol_in_frame = ctx->current_absolute_symbol % num_symbols_per_frame;
-  int32_t diff = symbol_in_frame - current_symbol_in_frame;
-  if (diff < -num_symbols_per_frame / 2) {
-    diff += num_symbols_per_frame;
-  } else if (diff > num_symbols_per_frame / 2) {
-    diff -= num_symbols_per_frame;
+  uint8_t current_frame_id = (ctx->current_absolute_symbol / num_symbols_per_frame) % 256;
+  int frame_diff = (int)hdr->cmnhdr.field.frameId - (int)current_frame_id;
+  if (frame_diff < -128) {
+    frame_diff += 256;
+  } else if (frame_diff > 127) {
+    frame_diff -= 256;
   }
+  int32_t diff = frame_diff * num_symbols_per_frame + (int32_t)symbol_in_frame - (int32_t)current_symbol_in_frame;
   txrx_window_histogram_count(&ctx->stats.dl_cplane_hist, diff);
   if (diff > (int32_t)ctx->T2a_max_cp_sym_diff) {
     ctx->stats.cplane_err_early++;
@@ -508,12 +512,14 @@ static void handle_ul_cplane_packet(oru_packet_processor_context_t *ctx,
   int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << numerology) * NR_SYMBOLS_PER_SLOT;
   uint64_t symbol_in_frame = slot_in_frame * 14 + start_symbol;
   uint32_t current_symbol_in_frame = ctx->current_absolute_symbol % num_symbols_per_frame;
-  int32_t diff = symbol_in_frame - current_symbol_in_frame;
-  if (diff < -num_symbols_per_frame / 2) {
-    diff += num_symbols_per_frame;
-  } else if (diff > num_symbols_per_frame / 2) {
-    diff -= num_symbols_per_frame;
+  uint8_t current_frame_id = (ctx->current_absolute_symbol / num_symbols_per_frame) % 256;
+  int frame_diff = (int)hdr->cmnhdr.field.frameId - (int)current_frame_id;
+  if (frame_diff < -128) {
+    frame_diff += 256;
+  } else if (frame_diff > 127) {
+    frame_diff -= 256;
   }
+  int32_t diff = frame_diff * num_symbols_per_frame + (int32_t)symbol_in_frame - (int32_t)current_symbol_in_frame;
   txrx_window_histogram_count(&ctx->stats.ul_cplane_hist, diff);
   if (diff > (int32_t)ctx->T2a_max_cp_sym_diff) {
     ctx->stats.cplane_err_early++;
@@ -587,12 +593,14 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
   int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << numerology) * NR_SYMBOLS_PER_SLOT;
   uint64_t symbol_in_frame = slot_in_frame * NR_SYMBOLS_PER_SLOT + start_symbol;
   uint32_t current_symbol_in_frame = ctx->current_absolute_symbol % num_symbols_per_frame;
-  int32_t diff = symbol_in_frame - current_symbol_in_frame;
-  if (diff < -num_symbols_per_frame / 2) {
-    diff += num_symbols_per_frame;
-  } else if (diff > num_symbols_per_frame / 2) {
-    diff -= num_symbols_per_frame;
+  uint8_t current_frame_id = (ctx->current_absolute_symbol / num_symbols_per_frame) % 256;
+  int frame_diff = (int)hdr->cmnhdr.field.frameId - (int)current_frame_id;
+  if (frame_diff < -128) {
+    frame_diff += 256;
+  } else if (frame_diff > 127) {
+    frame_diff -= 256;
   }
+  int32_t diff = frame_diff * num_symbols_per_frame + (int32_t)symbol_in_frame - (int32_t)current_symbol_in_frame;
   txrx_window_histogram_count(&ctx->stats.prach_cplane_hist, diff);
   uint64_t target_absolute_symbol = ctx->current_absolute_symbol + diff;
 
