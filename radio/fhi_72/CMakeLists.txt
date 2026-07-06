@@ -21,7 +21,7 @@ add_library(oran_fhlib_5g MODULE
 set(F_VERSION 6.1.9)
 set(K_VERSION 11.1.2)
 
-add_boolean_option(xran_DOWNLOAD OFF "Download and build xran library" OFF)
+add_boolean_option(xran_DOWNLOAD ON "Download and build xran library if not found in xran_LOCATION" OFF)
 
 find_package(xran)
 if(xran_FOUND)
