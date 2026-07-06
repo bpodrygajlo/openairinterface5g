@@ -43,12 +43,15 @@ elseif(NOT xran_FOUND AND xran_DOWNLOAD)
   endif()
   include(ExternalProject)
   set(xran_DIR "${CMAKE_BINARY_DIR}/.deps/src/extern_xran/fhi_lib/lib")
+  if (CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
+    set(EXTRA_TARGET_STRING "TARGET=armv8")
+  endif()
   ExternalProject_Add(extern_xran
       PREFIX ${CMAKE_BINARY_DIR}/.deps
       GIT_REPOSITORY https://github.com/openairinterface/o-du-phy.git
       GIT_TAG ${K_VERSION}
       CONFIGURE_COMMAND ""  # nothing to configure
-      BUILD_COMMAND cd fhi_lib/lib && WIRELESS_SDK_TOOLCHAIN=gcc RTE_SDK=${dpdk_PREFIX} XRAN_DIR=.. make XRAN_LIB_SO=1
+      BUILD_COMMAND cd fhi_lib/lib && ${EXTRA_TARGET_STRING} WIRELESS_SDK_TOOLCHAIN=gcc RTE_SDK=${dpdk_PREFIX} XRAN_DIR=.. make XRAN_LIB_SO=1
       BUILD_IN_SOURCE ON
       INSTALL_COMMAND ""
       BUILD_BYPRODUCTS ${xran_DIR}/build/libxran.so
