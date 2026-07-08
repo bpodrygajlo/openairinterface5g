@@ -21,15 +21,6 @@
 
 #define PRACH_ERR_LOG_RATELIMIT 10000
 
-#define RATELIMIT(n, block)                                                               \
-  do {                                                                                    \
-    static _Atomic unsigned long counter = 0;                                             \
-    unsigned long current = atomic_fetch_add_explicit(&counter, 1, memory_order_relaxed); \
-    if (current % (n) == 0) {                                                             \
-      block                                                                               \
-    }                                                                                     \
-  } while (0)
-
 #define DL_JOB_RING_SIZE 128
 #define UL_JOB_RING_SIZE 128
 #define MAX_CONCURRENT_DL_JOBS (DL_JOB_RING_SIZE - 1)

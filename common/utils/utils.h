@@ -75,6 +75,15 @@ extern "C" {
     }                    \
   } while (0)
 
+#define RATELIMIT(n, block)                                                               \
+  do {                                                                                    \
+    static _Atomic unsigned long counter = 0;                                             \
+    unsigned long current = atomic_fetch_add_explicit(&counter, 1, memory_order_relaxed); \
+    if (current % (n) == 0) {                                                             \
+      block                                                                               \
+    }                                                                                     \
+  } while (0)
+
 static inline void *malloc16_clear( size_t size ) {
   void *ptr = memalign(64, size + 64);
   DevAssert(ptr);
