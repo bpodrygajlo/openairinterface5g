@@ -8,7 +8,7 @@ add_library(xran_compression STATIC
 )
 
 target_include_directories(xran_compression PUBLIC ./ ../xran_pkt)
-target_compile_options(xran_compression PRIVATE ${dpdk_CFLAGS} -march=native)
+target_compile_options(xran_compression PRIVATE ${dpdk_CFLAGS} -march=native -Wno-psabi)
 target_link_libraries(xran_compression PRIVATE ${dpdk_LIBRARIES})
 target_include_directories(xran_compression PUBLIC ${dpdk_INCLUDE_DIRS})
 

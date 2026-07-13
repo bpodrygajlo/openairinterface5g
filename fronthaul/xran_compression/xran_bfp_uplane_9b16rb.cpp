@@ -10,7 +10,7 @@
 #include "xran_compression.h"
 #include <complex>
 #include <algorithm>
-#include <immintrin.h>
+#include "simd_wrapper.h"
 #include <limits.h>
 #include <cstring>
 

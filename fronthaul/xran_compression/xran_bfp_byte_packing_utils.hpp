@@ -5,7 +5,7 @@
  */
 
 #pragma once
-#include <immintrin.h>
+#include "simd_wrapper.h"
 
 namespace BlockFloatCompander {
 /// Define function signatures for byte packing functions

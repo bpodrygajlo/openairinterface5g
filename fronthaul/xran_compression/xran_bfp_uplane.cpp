@@ -9,7 +9,7 @@
 #include "xran_bfp_byte_packing_utils.hpp"
 #include <complex>
 #include <algorithm>
-#include <immintrin.h>
+#include "simd_wrapper.h"
 
 namespace BFP_UPlane {
 /// Namespace constants

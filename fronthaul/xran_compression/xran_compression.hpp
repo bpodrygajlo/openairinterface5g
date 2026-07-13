@@ -6,7 +6,7 @@
 
 #pragma once
 #include <stdint.h>
-#include <immintrin.h>
+#include "simd_wrapper.h"
 
 // This configuration file sets global constants and macros which are
 // of general use throughout the project.

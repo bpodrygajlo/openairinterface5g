@@ -5,7 +5,7 @@
  */
 
 #pragma once
-#include <immintrin.h>
+#include "simd_wrapper.h"
 
 namespace BlockFloatCompander {
 /// Calculate exponent based on 16 max abs values using leading zero count.
