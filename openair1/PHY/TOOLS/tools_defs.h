@@ -853,14 +853,7 @@ static inline void rotate_cpx_vector(const c16_t *const x, const c16_t alpha, c1
 
     simde__m128i shift = simde_mm_cvtsi32_si128(output_shift);
 
-    ((int16_t *)&alpha_128)[0] = alpha.r;
-    ((int16_t *)&alpha_128)[1] = (int16_t)-alpha.i;
-    ((int16_t *)&alpha_128)[2] = alpha.i;
-    ((int16_t *)&alpha_128)[3] = alpha.r;
-    ((int16_t *)&alpha_128)[4] = alpha.r;
-    ((int16_t *)&alpha_128)[5] =  (int16_t)-alpha.i;
-    ((int16_t *)&alpha_128)[6] = alpha.i;
-    ((int16_t *)&alpha_128)[7] = alpha.r;
+    alpha_128 = simde_mm_setr_epi16(alpha.r, (int16_t)-alpha.i, alpha.i, alpha.r, alpha.r, (int16_t)-alpha.i, alpha.i, alpha.r);
     y_128 = (simd_q15_t *)y;
 
     for (i = 0; i < N >> 2; i++) {
