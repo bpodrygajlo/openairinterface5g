@@ -59,7 +59,8 @@ void nr_normal_prefix_mod(c16_t *txdataF,
 {
   // This function works only slot wise. For more generic symbol generation refer nr_feptx0()
   if (frame_parms->numerology_index != 0) { // case where numerology != 0
-    if (!(slot%(frame_parms->slots_per_subframe/2))) {
+    const int half_slots = frame_parms->slots_per_subframe >> 1;
+    if (!(slot & (half_slots - 1))) {
       if (was_symbol_used[0]) {
         PHY_ofdm_mod((int *)txdataF,
                     (int *)txdata,
@@ -70,33 +71,59 @@ void nr_normal_prefix_mod(c16_t *txdataF,
       } else {
         memset(txdata, 0, (frame_parms->nb_prefix_samples0 +  frame_parms->ofdm_symbol_size) * sizeof(c16_t));
       }
-      for (int i = 1; i < nsymb; i++) {
-        c16_t* tx_data_ptr = txdata + (i - 1) * (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples) +
-                            frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples0;
+      
+      int i = 1;
+      while (i < nsymb) {
         if (was_symbol_used[i]) {
+          int run_len = 0;
+          while (i + run_len < nsymb && was_symbol_used[i + run_len]) {
+            run_len++;
+          }
+          c16_t* tx_data_ptr = txdata + (i - 1) * (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples) +
+                              frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples0;
           PHY_ofdm_mod((int *)txdataF + frame_parms->ofdm_symbol_size * i,
-                      (int *)tx_data_ptr,
-                      frame_parms->ofdm_symbol_size,
-                      1,
-                      frame_parms->nb_prefix_samples,
-                      CYCLIC_PREFIX);
+                       (int *)tx_data_ptr,
+                       frame_parms->ofdm_symbol_size,
+                       run_len,
+                       frame_parms->nb_prefix_samples,
+                       CYCLIC_PREFIX);
+          i += run_len;
         } else {
-          memset(tx_data_ptr, 0, (frame_parms->nb_prefix_samples + frame_parms->ofdm_symbol_size) * sizeof(c16_t));
+          int run_len = 0;
+          while (i + run_len < nsymb && !was_symbol_used[i + run_len]) {
+            run_len++;
+          }
+          c16_t* tx_data_ptr = txdata + (i - 1) * (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples) +
+                              frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples0;
+          memset(tx_data_ptr, 0, run_len * (frame_parms->nb_prefix_samples + frame_parms->ofdm_symbol_size) * sizeof(c16_t));
+          i += run_len;
         }
       }
     }
     else {
-      for (int i = 0; i < nsymb; i++) {
-        c16_t* tx_data_ptr = txdata + i * (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples);
+      int i = 0;
+      while (i < nsymb) {
         if (was_symbol_used[i]) {
+          int run_len = 0;
+          while (i + run_len < nsymb && was_symbol_used[i + run_len]) {
+            run_len++;
+          }
+          c16_t* tx_data_ptr = txdata + i * (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples);
           PHY_ofdm_mod((int *)txdataF + frame_parms->ofdm_symbol_size * i,
-                      (int *)tx_data_ptr,
-                      frame_parms->ofdm_symbol_size,
-                      1,
-                      frame_parms->nb_prefix_samples,
-                      CYCLIC_PREFIX);
+                       (int *)tx_data_ptr,
+                       frame_parms->ofdm_symbol_size,
+                       run_len,
+                       frame_parms->nb_prefix_samples,
+                       CYCLIC_PREFIX);
+          i += run_len;
         } else {
-          memset(tx_data_ptr, 0, (frame_parms->nb_prefix_samples + frame_parms->ofdm_symbol_size) * sizeof(c16_t));
+          int run_len = 0;
+          while (i + run_len < nsymb && !was_symbol_used[i + run_len]) {
+            run_len++;
+          }
+          c16_t* tx_data_ptr = txdata + i * (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples);
+          memset(tx_data_ptr, 0, run_len * (frame_parms->nb_prefix_samples + frame_parms->ofdm_symbol_size) * sizeof(c16_t));
+          i += run_len;
         }
       }
     }
@@ -129,8 +156,8 @@ void nr_normal_prefix_mod(c16_t *txdataF,
                    frame_parms->nb_prefix_samples,
                    CYCLIC_PREFIX);
   }
-
 }
+
 
 void PHY_ofdm_mod(const int *input, /// pointer to complex input
                   int *output, /// pointer to complex output
