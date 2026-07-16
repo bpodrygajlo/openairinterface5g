@@ -2570,6 +2570,16 @@ void nr_ue_ul_scheduler(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
     return;
   LOG_D(NR_MAC, "number of UL PDUs: %d with UL transmission in sfn [%d.%d]\n", *ulcfg_pdu->privateNBpdus, frame_tx, slot_tx);
 
+  bool pusch_present = false;
+  fapi_nr_ul_config_request_pdu_t *tmp_pdu = ulcfg_pdu;
+  while (tmp_pdu->pdu_type != FAPI_NR_END) {
+    if (tmp_pdu->pdu_type == FAPI_NR_UL_CONFIG_TYPE_PUSCH) {
+      pusch_present = true;
+      break;
+    }
+    tmp_pdu++;
+  }
+
   while (ulcfg_pdu->pdu_type != FAPI_NR_END) {
     uint8_t *ulsch_input_buffer = ulsch_input_buffer_array[number_of_pdus];
     if (ulcfg_pdu->pdu_type == FAPI_NR_UL_CONFIG_TYPE_PUSCH) {
@@ -2598,6 +2608,7 @@ void nr_ue_ul_scheduler(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
           if (!nr_timer_is_active(&mac->time_alignment_timer) && mac->state == UE_CONNECTED && !get_softmodem_params()->phy_test) {
             // UL data arrival during RRC_CONNECTED when UL synchronisation status is "non-synchronised"
             trigger_MAC_UE_RA(mac, NULL);
+            release_ul_config(ulcfg_pdu, true);
             return;
           }
           // Getting IP traffic to be transmitted
@@ -2646,8 +2657,9 @@ void nr_ue_ul_scheduler(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
   }
   release_ul_config(ulcfg_pdu, false);
 
-  if(mac->state >= UE_PERFORMING_RA && mac->state < UE_DETACHING)
-    nr_ue_pucch_scheduler(mac, frame_tx, slot_tx);
+  if (!pusch_present) {
+    return;
+  }
 
   if (mac->if_module != NULL && mac->if_module->scheduled_response != NULL) {
     LOG_D(NR_MAC, "3# scheduled_response transmitted,%d, %d\n", frame_tx, slot_tx);
@@ -2689,6 +2701,41 @@ void nr_ue_ul_scheduler(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
       // reset bj timer
       nr_timer_start(&sched_info->Bj_timer);
     }
+  }
+}
+
+void nr_ue_ul_scheduler_step2(NR_UE_MAC_INST_t *mac, nr_uplink_indication_t *ul_info)
+{
+  int cc_id = ul_info->cc_id;
+  frame_t frame_tx = ul_info->frame;
+  slot_t slot_tx = ul_info->slot;
+
+  bool pusch_present = false;
+  fapi_nr_ul_config_request_t *ul_config = mac->ul_config_request + slot_tx;
+  pthread_mutex_lock(&ul_config->mutex_ul_config);
+  for (int i = 0; i < ul_config->number_pdus; i++) {
+    if (ul_config->ul_config_list[i].pdu_type == FAPI_NR_UL_CONFIG_TYPE_PUSCH) {
+      pusch_present = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&ul_config->mutex_ul_config);
+
+  if (!pusch_present) {
+    nr_ue_ul_scheduler(mac, ul_info);
+  }
+
+  if (mac->state >= UE_PERFORMING_RA && mac->state < UE_DETACHING)
+    nr_ue_pucch_scheduler(mac, frame_tx, slot_tx);
+
+  if (mac->if_module != NULL && mac->if_module->scheduled_response != NULL) {
+    LOG_D(NR_MAC, "scheduled_response step 2 transmitted,%d, %d\n", frame_tx, slot_tx);
+    nr_scheduled_response_t scheduled_response = {.ul_config = mac->ul_config_request + slot_tx,
+                                                  .mac = mac,
+                                                  .module_id = mac->ue_id,
+                                                  .CC_id = cc_id,
+                                                  .phy_data = ul_info->phy_data};
+    mac->if_module->scheduled_response(&scheduled_response);
   }
 }
 

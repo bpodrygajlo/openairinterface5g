@@ -421,23 +421,78 @@ void processSlotTX(void *arg)
       }
 
     } else {
-      // trigger L2 to run ue_scheduler thru IF module
-      // [TODO] mapping right after NR initial sync
-      if (UE->if_inst != NULL && UE->if_inst->ul_indication != NULL) {
-        start_meas(&UE->ue_ul_indication_stats);
-        nr_uplink_indication_t ul_indication = {.module_id = UE->Mod_id,
-                                                .gNB_index = proc->gNB_id,
-                                                .cc_id = UE->CC_id,
-                                                .frame = proc->frame_tx,
-                                                .slot = proc->nr_slot_tx,
-                                                .phy_data = &phy_data};
-
-        UE->if_inst->ul_indication(&ul_indication);
-        stop_meas(&UE->ue_ul_indication_stats);
+      bool pusch_present = false;
+      NR_UE_MAC_INST_t *mac = get_mac_inst(UE->Mod_id);
+      if (mac && mac->ul_config_request) {
+        fapi_nr_ul_config_request_t *ul_config = mac->ul_config_request + proc->nr_slot_tx;
+        pthread_mutex_lock(&ul_config->mutex_ul_config);
+        for (int i = 0; i < ul_config->number_pdus; i++) {
+          if (ul_config->ul_config_list[i].pdu_type == FAPI_NR_UL_CONFIG_TYPE_PUSCH) {
+            pusch_present = true;
+            break;
+          }
+        }
+        pthread_mutex_unlock(&ul_config->mutex_ul_config);
       }
-      dynamic_barrier_join(rxtxD->next_barrier);
 
-      phy_procedures_nrUE_TX(UE, proc, &phy_data, txp);
+      const int samplesF_per_slot = fp->symbols_per_slot * fp->ofdm_symbol_size;
+      c16_t txdataF_buf[fp->nb_antennas_tx * samplesF_per_slot] __attribute__((aligned(32)));
+      memset(txdataF_buf, 0, sizeof(txdataF_buf));
+      c16_t *txdataF[fp->nb_antennas_tx];
+      for (int i = 0; i < fp->nb_antennas_tx; ++i)
+        txdataF[i] = &txdataF_buf[i * samplesF_per_slot];
+      bool was_symbol_used[NR_SYMBOLS_PER_SLOT] = {0};
+      rate_match_info_uci_t rm_info = {0};
+      unsigned int G = 0;
+
+      if (pusch_present) {
+        // Step 1: Schedule PUSCH data and perform pre-encoding/LDPC encoding
+        if (UE->if_inst != NULL && UE->if_inst->ul_indication != NULL) {
+          start_meas(&UE->ue_ul_indication_stats);
+          nr_uplink_indication_t ul_indication = {.module_id = UE->Mod_id,
+                                                  .gNB_index = proc->gNB_id,
+                                                  .cc_id = UE->CC_id,
+                                                  .frame = proc->frame_tx,
+                                                  .slot = proc->nr_slot_tx,
+                                                  .phy_data = &phy_data};
+          UE->if_inst->ul_indication(&ul_indication);
+          stop_meas(&UE->ue_ul_indication_stats);
+        }
+        phy_procedures_nrUE_TX_step1(UE, proc, &phy_data, &rm_info, &G);
+
+        // Barrier: Wait for DL PDSCH decoding to finish to get HARQ ACK/NACK bits
+        dynamic_barrier_join(rxtxD->next_barrier);
+
+        // Step 2: Schedule control (HARQ/PUCCH/etc.) and complete modulation & RF transmission
+        if (UE->if_inst != NULL && UE->if_inst->ul_indication_step2 != NULL) {
+          start_meas(&UE->ue_ul_indication_stats);
+          nr_uplink_indication_t ul_indication = {.module_id = UE->Mod_id,
+                                                  .gNB_index = proc->gNB_id,
+                                                  .cc_id = UE->CC_id,
+                                                  .frame = proc->frame_tx,
+                                                  .slot = proc->nr_slot_tx,
+                                                  .phy_data = &phy_data};
+          UE->if_inst->ul_indication_step2(&ul_indication);
+          stop_meas(&UE->ue_ul_indication_stats);
+        }
+        phy_procedures_nrUE_TX_step2(UE, proc, &phy_data, txdataF, was_symbol_used, &rm_info, G, txp);
+      } else {
+        // No PUSCH: Wait for DL barrier first, then perform all scheduling and transmission in Step 2
+        dynamic_barrier_join(rxtxD->next_barrier);
+
+        if (UE->if_inst != NULL && UE->if_inst->ul_indication_step2 != NULL) {
+          start_meas(&UE->ue_ul_indication_stats);
+          nr_uplink_indication_t ul_indication = {.module_id = UE->Mod_id,
+                                                  .gNB_index = proc->gNB_id,
+                                                  .cc_id = UE->CC_id,
+                                                  .frame = proc->frame_tx,
+                                                  .slot = proc->nr_slot_tx,
+                                                  .phy_data = &phy_data};
+          UE->if_inst->ul_indication_step2(&ul_indication);
+          stop_meas(&UE->ue_ul_indication_stats);
+        }
+        phy_procedures_nrUE_TX_step2(UE, proc, &phy_data, txdataF, was_symbol_used, &rm_info, G, txp);
+      }
     }
   } else {
     dynamic_barrier_join(rxtxD->next_barrier);

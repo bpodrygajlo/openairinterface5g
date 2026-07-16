@@ -110,6 +110,22 @@ void nr_ue_ulsch_procedures(PHY_VARS_NR_UE *UE,
                             c16_t **txdataF,
                             bool was_symbol_used[NR_SYMBOLS_PER_SLOT]);
 
+void nr_ue_ulsch_procedures_step1(PHY_VARS_NR_UE *UE,
+                                  const uint32_t frame,
+                                  const uint8_t slot,
+                                  nr_phy_data_tx_t *phy_data,
+                                  rate_match_info_uci_t *rm_info,
+                                  unsigned int *G_out);
+
+void nr_ue_ulsch_procedures_step2(PHY_VARS_NR_UE *UE,
+                                  const uint32_t frame,
+                                  const uint8_t slot,
+                                  nr_phy_data_tx_t *phy_data,
+                                  c16_t **txdataF,
+                                  bool was_symbol_used[NR_SYMBOLS_PER_SLOT],
+                                  rate_match_info_uci_t *rm_info,
+                                  unsigned int G_step1);
+
 /** \brief This function does IFFT for PUSCH
 */
 
