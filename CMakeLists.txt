@@ -357,6 +357,45 @@ if (TRACY_ENABLE)
   CPMAddPackage("gh:wolfpld/tracy#v0.13.1")
 endif()
 
+#########################################################
+# Optional memory allocator (mimalloc / tcmalloc)       #
+#########################################################
+# Built from source via CPM, then linked into every target below with
+# link_libraries(). No source changes needed: a directly-linked shared lib
+# that exports malloc/free/calloc/realloc is resolved by the dynamic loader
+# before glibc's, since it appears earlier than libc in the executable's
+# NEEDED list. This must stay above the first add_library/add_executable
+# call so the override applies process-wide.
+set(MEMORY_ALLOCATOR "System" CACHE STRING "C memory allocator to use: System, mimalloc, or tcmalloc")
+set_property(CACHE MEMORY_ALLOCATOR PROPERTY STRINGS "System" "mimalloc" "tcmalloc")
+
+if (MEMORY_ALLOCATOR STREQUAL "mimalloc")
+  CPMAddPackage(
+    NAME mimalloc
+    GITHUB_REPOSITORY microsoft/mimalloc
+    GIT_TAG v2.1.7
+    OPTIONS "MI_BUILD_SHARED ON" "MI_BUILD_STATIC OFF" "MI_BUILD_OBJECT OFF" "MI_BUILD_TESTS OFF" "MI_OVERRIDE ON"
+  )
+  set(OAI_MALLOC_OVERRIDE_LIB mimalloc)
+elseif (MEMORY_ALLOCATOR STREQUAL "tcmalloc")
+  # tcmalloc_minimal: plain allocator override, without the heap/cpu profiler
+  # machinery (and its libunwind dependency) that the full "tcmalloc" target pulls in.
+  CPMAddPackage(
+    NAME gperftools
+    GITHUB_REPOSITORY gperftools/gperftools
+    GIT_TAG gperftools-2.15
+    OPTIONS "BUILD_SHARED_LIBS ON" "GPERFTOOLS_BUILD_CPU_PROFILER OFF" "GPERFTOOLS_BUILD_HEAP_PROFILER OFF" "GPERFTOOLS_BUILD_DEBUGALLOC OFF" "BUILD_TESTING OFF"
+  )
+  set(OAI_MALLOC_OVERRIDE_LIB tcmalloc_minimal)
+elseif (NOT MEMORY_ALLOCATOR STREQUAL "System")
+  message(FATAL_ERROR "Unknown MEMORY_ALLOCATOR '${MEMORY_ALLOCATOR}': expected System, mimalloc, or tcmalloc")
+endif()
+
+if (OAI_MALLOC_OVERRIDE_LIB)
+  message(STATUS "Overriding process-wide malloc/free/calloc/realloc with ${MEMORY_ALLOCATOR} (target ${OAI_MALLOC_OVERRIDE_LIB})")
+  link_libraries(${OAI_MALLOC_OVERRIDE_LIB})
+endif()
+
 set (OCP_ITTI ${OPENAIR_DIR}/common/utils/ocp_itti)
 add_library(ITTI ${OCP_ITTI}/intertask_interface.cpp)
 target_link_libraries(ITTI PRIVATE asn1_lte_rrc_hdrs asn1_nr_rrc_hdrs)
