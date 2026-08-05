@@ -42,6 +42,8 @@ typedef struct {
   uint32_t T2a_up_max_uS;
   uint32_t T2a_cp_min_uS;
   uint32_t T2a_cp_max_uS;
+  /* CLOCK_REALTIME timescale: FH_CLOCK_UTC (default) or FH_CLOCK_TAI. */
+  fh_clock_timebase_t clock_timebase;
   oru_fh_tdd_pattern_t tdd_pattern;
   int prach_eaxc_offset;
   int prach_kbar;

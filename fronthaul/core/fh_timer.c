@@ -14,11 +14,36 @@
 #define NS_PER_MS 1000000ULL
 #define NS_PER_FRAME (10 * NS_PER_MS)
 
-static uint64_t get_gps_ns(void)
+static uint64_t get_gps_utc_ns(void)
 {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   return ((uint64_t)ts.tv_sec - GPS_EPOCH_OFFSET_UNIX + GPS_LEAP_SECONDS) * NS_PER_SEC + ts.tv_nsec;
+}
+
+static uint64_t get_gps_tai_ns(void)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return ((uint64_t)ts.tv_sec - GPS_EPOCH_OFFSET_UNIX - GPS_TAI_LAG_SECONDS) * NS_PER_SEC + ts.tv_nsec;
+}
+
+static void fh_timer_apply_timebase(fh_timer_t *timer, fh_clock_timebase_t timebase)
+{
+  /* Only TAI is special-cased; anything else uses UTC. */
+  timer->timebase = (timebase == FH_CLOCK_TAI) ? FH_CLOCK_TAI : FH_CLOCK_UTC;
+  timer->get_gps_ns = (timebase == FH_CLOCK_TAI) ? get_gps_tai_ns : get_gps_utc_ns;
+}
+
+static void fh_timer_seed_from_now(fh_timer_t *timer)
+{
+  uint64_t total_syms_per_ms = 14 << timer->numerology;
+  uint64_t gps_now = timer->get_gps_ns();
+  typedef __int128_t int128;
+  uint64_t s_abs = (uint64_t)((int128)gps_now * total_syms_per_ms / NS_PER_MS);
+  rte_atomic64_set(&timer->s_abs, s_abs);
+  timer->next_s_abs = s_abs + 1;
+  timer->target_gps_ns = (uint64_t)((int128)timer->next_s_abs * NS_PER_MS / total_syms_per_ms);
 }
 
 void fh_timer_tick(fh_timer_t *timer)
@@ -26,7 +51,7 @@ void fh_timer_tick(fh_timer_t *timer)
   if (!timer->running)
     return;
 
-  uint64_t now = get_gps_ns();
+  uint64_t now = timer->get_gps_ns();
   if (now >= timer->target_gps_ns) {
     typedef __int128_t int128;
     uint64_t total_syms_per_ms = 14 << timer->numerology;
@@ -67,21 +92,21 @@ int fh_timer_init(fh_timer_t *timer, int numerology)
   timer->numerology = numerology;
   timer->num_cbs = 0;
   timer->running = true;
+  fh_timer_apply_timebase(timer, FH_CLOCK_UTC);
 
   uint64_t total_syms_per_ms = 14 << numerology;
   timer->ns_per_symbol = NS_PER_MS / total_syms_per_ms;
   timer->symbols_per_frame = 10 * total_syms_per_ms;
   timer->slots_per_frame = 10 << numerology;
 
-  // Initial timing state
-  uint64_t gps_now = get_gps_ns();
-  typedef __int128_t int128;
-  uint64_t s_abs = (uint64_t)((int128)gps_now * total_syms_per_ms / NS_PER_MS);
-  rte_atomic64_set(&timer->s_abs, s_abs);
-  timer->next_s_abs = s_abs + 1;
-  timer->target_gps_ns = (uint64_t)((int128)timer->next_s_abs * NS_PER_MS / total_syms_per_ms);
-
+  fh_timer_seed_from_now(timer);
   return 0;
+}
+
+void fh_timer_set_timebase(fh_timer_t *timer, fh_clock_timebase_t timebase)
+{
+  fh_timer_apply_timebase(timer, timebase);
+  fh_timer_seed_from_now(timer);
 }
 
 int fh_timer_register_cb(fh_timer_t *timer, fh_timer_cb cb, void *user_data)
@@ -103,7 +128,7 @@ void fh_timer_stop(fh_timer_t *timer)
 
 uint64_t fh_timer_get_current_symbol(fh_timer_t *timer)
 {
-  uint64_t gps_now = get_gps_ns();
+  uint64_t gps_now = timer->get_gps_ns();
 
   typedef __int128_t int128;
   uint64_t total_syms_per_ms = 14 << timer->numerology;

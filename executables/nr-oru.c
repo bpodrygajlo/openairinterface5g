@@ -87,6 +87,7 @@
 #define CONFIG_STRING_PRACH_EAXC_OFFSET "prach_eaxc_offset"
 #define CONFIG_STRING_PRACH_KBAR "prach_kbar"
 #define CONFIG_STRING_COMP_TYPE         "comp_type"
+#define CONFIG_STRING_CLOCK_TIMEBASE    "clock_timebase"
 
 #define HLP_DPDK_DEVICES "DPDK devices to use for the O-RU."
 #define HLP_RX_CORE "The CPU core to be used to deploy dpdk RX worker for O-RU."
@@ -96,11 +97,19 @@
 #define HLP_PRACH_EAXC_OFFSET "PRACH eAxC offset."
 #define HLP_PRACH_KBAR "PRACH kbar offset."
 #define HLP_COMP_TYPE         "DL U-plane compression method: none, bfp, blkscale, or ulaw."
+#define HLP_CLOCK_TIMEBASE \
+  "Timescale of CLOCK_REALTIME for FH GPS mapping: utc (default, GPS = unix - epoch + 18) or tai (GPS = unix - epoch - 19)."
 
 #define COMP_TYPE_CHECK                                                               \
   &(checkedparam_t)                                                                   \
   {                                                                                   \
     .s3a = { config_checkstr_assign_integer, {"none", "bfp", "blkscale", "ulaw"}, {0, 1, 2, 3}, 4 } \
+  }
+
+#define CLOCK_TIMEBASE_CHECK                                                          \
+  &(checkedparam_t)                                                                   \
+  {                                                                                   \
+    .s3a = { config_checkstr_assign_integer, {"utc", "tai"}, {0, 1}, 2 }               \
   }
 
 // clang-format off
@@ -115,7 +124,8 @@
   {CONFIG_STRING_T2A_CP,                     "",                    0,                      .iptr=NULL,       .defintarrayval=NULL,         TYPE_INTARRAY,     0}, \
   {CONFIG_STRING_PRACH_EAXC_OFFSET,          HLP_PRACH_EAXC_OFFSET, 0,                      .u8ptr=NULL,      .defuintval=0,                TYPE_UINT8,        0}, \
   {CONFIG_STRING_PRACH_KBAR,                 HLP_PRACH_KBAR,        0,                      .uptr=NULL,       .defuintval=4,                TYPE_UINT,         0}, \
-  {CONFIG_STRING_COMP_TYPE,                  HLP_COMP_TYPE,         0,                      .strptr=NULL,     .defstrval="none",           TYPE_STRING,       0, COMP_TYPE_CHECK}  \
+  {CONFIG_STRING_COMP_TYPE,                  HLP_COMP_TYPE,         0,                      .strptr=NULL,     .defstrval="none",           TYPE_STRING,       0, COMP_TYPE_CHECK}, \
+  {CONFIG_STRING_CLOCK_TIMEBASE,             HLP_CLOCK_TIMEBASE,    0,                      .strptr=NULL,     .defstrval="utc",            TYPE_STRING,       0, CLOCK_TIMEBASE_CHECK}  \
 }
 // clang-format on
 
@@ -265,6 +275,9 @@ int get_oru_options(ORU_t *oru)
   int comp_type_idx = config_paramidx_fromname(fh_param, nump, CONFIG_STRING_COMP_TYPE);
   AssertFatal(comp_type_idx >= 0, "Index for %s config option not found!\n", CONFIG_STRING_COMP_TYPE);
   fh_cfg->comp_type = (fh_comp_method_t)config_get_processedint(config_get_if(), &fh_param[comp_type_idx]);
+  int clock_tb_idx = config_paramidx_fromname(fh_param, nump, CONFIG_STRING_CLOCK_TIMEBASE);
+  AssertFatal(clock_tb_idx >= 0, "Index for %s config option not found!\n", CONFIG_STRING_CLOCK_TIMEBASE);
+  fh_cfg->clock_timebase = (fh_clock_timebase_t)config_get_processedint(config_get_if(), &fh_param[clock_tb_idx]);
   fh_cfg->rx_core = *gpd(fh_param, nump, CONFIG_STRING_RX_CORE)->iptr;
   fh_cfg->mtu = *gpd(fh_param, nump, CONFIG_STRING_MTU)->iptr;
   fh_cfg->num_prbs = oru->bw_tx[0];

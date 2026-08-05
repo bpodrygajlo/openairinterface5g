@@ -155,6 +155,7 @@ void *oru_fh_init(oru_fh_config_t *cfg)
   memset(fh, 0, sizeof(oru_fh_t));
   fh->cfg = *cfg;
   fh->io_config.numerology = cfg->numerology;
+  fh->io_config.clock_timebase = cfg->clock_timebase;
   fh->io_config.num_ports = cfg->dpdk_conf.num_dpdk_devices;
   for (int i = 0; i < cfg->dpdk_conf.num_dpdk_devices; i++) {
     if (rte_eth_dev_get_port_by_name(cfg->dpdk_conf.dpdk_devices[i], &fh->io_config.port_ids[i]) < 0) {
@@ -183,7 +184,11 @@ void *oru_fh_init(oru_fh_config_t *cfg)
   uint16_t payload_size = cfg->num_prbs * 12 * 4; // 16-bit IQ (4 bytes per sample)
   uint16_t required_mtu = header_size + payload_size;
 
-  printf("ORU_FH: PRBs %u -> Required MTU %u (Limit %u)\n", cfg->num_prbs, required_mtu, cfg->mtu);
+  printf("ORU_FH: PRBs %u -> Required MTU %u (Limit %u); clock_timebase=%s\n",
+         cfg->num_prbs,
+         required_mtu,
+         cfg->mtu,
+         cfg->clock_timebase == FH_CLOCK_TAI ? "tai" : "utc");
 
   fh->io_config.mbuf_data_room = required_mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + RTE_PKTMBUF_HEADROOM;
   fh->io_config.mbuf_count = 8192; // Default pool size
@@ -263,7 +268,11 @@ int oru_fh_get_utc_anchor_point(void *handle, uint64_t *hyper_frame, uint32_t *f
   uint64_t total_syms_per_sec = (NR_SYMBOLS_PER_SLOT * 1000) << fh->cfg.numerology;
   uint64_t ns_per_symbol = 1000000000 / total_syms_per_sec;
   uint64_t leftover_syms = absolute_gps_symbol % total_syms_per_sec;
-  ts->tv_sec = (absolute_gps_symbol / total_syms_per_sec) + GPS_EPOCH_OFFSET_UNIX - GPS_LEAP_SECONDS;
+  /* Invert get_gps_ns(): system_sec = gps_sec + epoch - clock_to_gps */
+  int64_t clock_to_gps = (fh->io.timer.timebase == FH_CLOCK_TAI)
+                             ? -(int64_t)GPS_TAI_LAG_SECONDS
+                             : (int64_t)GPS_UTC_LEAP_SECONDS;
+  ts->tv_sec = (absolute_gps_symbol / total_syms_per_sec) + GPS_EPOCH_OFFSET_UNIX - clock_to_gps;
   ts->tv_nsec = leftover_syms * ns_per_symbol;
   return 0;
 }
