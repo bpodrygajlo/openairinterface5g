@@ -217,24 +217,30 @@ void nr_feptx(void *arg)
 void nr_feptx_tp(RU_t *ru, int frame_tx, int slot)
 {
   nfapi_nr_config_request_scf_t *cfg = &ru->gNB_list[0]->gNB_config;
-  if (nr_slot_select(cfg, frame_tx, slot) == NR_UPLINK_SLOT)
-    return;
-  start_meas(&ru->ofdm_total_stats);
-
   const NR_DL_FRAME_PARMS *fp = ru->nr_frame_parms;
-  int nt = fp->nb_antennas_tx;
-  size_t const sz = nt + (ru->half_slot_parallelization > 0) * nt;
-  feptx_cmd_t arr[sz];
-  task_ans_t ans;
-  init_task_ans(&ans, sz);
 
-  // Copy beam IDs
+  // Copy beam IDs. This must happen regardless of slot direction: with analog
+  // beamforming the RU's antenna array serves both TX and RX, so an uplink
+  // (RX-only) slot still needs its beam_id refreshed here for ctrl_rf() (which
+  // runs every slot when analog_bf is set, not just DL/mixed ones) to push the
+  // correct beam to the RF device instead of a stale one left over from a
+  // previous slot.
   if (ru->gNB_list[0]->common_vars.analog_bf) {
     for (uint_fast16_t i = 0; i < fp->symbols_per_slot; i++)
       memcpy(ru->common.beam_id[slot * fp->symbols_per_slot + i],
              ru->gNB_list[0]->common_vars.beam_id[slot * fp->symbols_per_slot + i],
              (ru->nb_tx) * sizeof(**ru->common.beam_id));
   }
+
+  if (nr_slot_select(cfg, frame_tx, slot) == NR_UPLINK_SLOT)
+    return;
+  start_meas(&ru->ofdm_total_stats);
+
+  int nt = fp->nb_antennas_tx;
+  size_t const sz = nt + (ru->half_slot_parallelization > 0) * nt;
+  feptx_cmd_t arr[sz];
+  task_ans_t ans;
+  init_task_ans(&ans, sz);
 
   int nbfeptx = 0;
   for (int aid = 0; aid < nt; aid++) {
