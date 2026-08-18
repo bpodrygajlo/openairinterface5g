@@ -48,6 +48,36 @@ static const unsigned int gain_table[31] = {100,  112,  126,  141,  158,  178,  
                                             359,  398,  447,  501,  562,  631,  708,  794,  891, 1000, 1122,
                                             1258, 1412, 1585, 1778, 1995, 2239, 2512, 2818, 3162};
 
+void nr_fill_dl_indication(nr_downlink_indication_t *dl_ind,
+                           fapi_nr_dci_indication_t *dci_ind,
+                           fapi_nr_rx_indication_t *rx_ind,
+                           const UE_nr_rxtx_proc_t *proc,
+                           PHY_VARS_NR_UE *ue,
+                           void *phy_data)
+{
+  memset((void*)dl_ind, 0, sizeof(nr_downlink_indication_t));
+
+  dl_ind->gNB_index = proc->gNB_id;
+  dl_ind->module_id = ue->Mod_id;
+  dl_ind->cc_id     = ue->CC_id;
+  dl_ind->hfn       = proc->hfn_rx;
+  dl_ind->frame     = proc->frame_rx;
+  dl_ind->slot      = proc->nr_slot_rx;
+  dl_ind->phy_data  = phy_data;
+
+  if (dci_ind) {
+
+    dl_ind->rx_ind = NULL; //no data, only dci for now
+    dl_ind->dci_ind = dci_ind;
+
+  } else if (rx_ind) {
+
+    dl_ind->rx_ind = rx_ind; //  hang on rx_ind instance
+    dl_ind->dci_ind = NULL;
+
+  }
+}
+
 static uint32_t get_ssb_arfcn(NR_DL_FRAME_PARMS *frame_parms)
 {
   uint32_t band_size_hz = frame_parms->N_RB_DL * 12 * frame_parms->subcarrier_spacing;
