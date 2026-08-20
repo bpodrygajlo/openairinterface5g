@@ -8,7 +8,6 @@ IP=192.168.71.150
 PORT=8091
 NCAT_TIMEOUT=1 #s
 SLEEP_WAIT=4 #s
-MAX_RETRIES=3
 
 set_and_verify_distance() {
   local distance=$1
@@ -36,31 +35,16 @@ set_and_verify_distance() {
 }
 
 test_distance() {
-  local distance=$1 retries=0
+  local distance=$1
 
-  # retry loop incase we didn't receive the response
-  while (( retries < MAX_RETRIES )); do
-    echo "  Attempt $((retries + 1))/$MAX_RETRIES"
+  # Always reset to 0 m before testing target distance
+  if ! set_and_verify_distance 0; then
+    echo " Set distance 0 m failed for distance: $distance m"
+    return 1
+  fi
 
-    # Always reset to 0 m before testing target distance
-    if ! set_and_verify_distance 0; then
-      echo " Set distance 0 m failed during attempt $((retries + 1))"
-    else
-      sleep "$SLEEP_WAIT"
-      # Now test the actual target distance
-      if set_and_verify_distance "$distance"; then
-        return 0
-      fi
-    fi
-
-    ((retries++))
-    if (( retries < MAX_RETRIES )); then
-      sleep "$SLEEP_WAIT"
-    else
-      echo " ERROR: No valid response after $MAX_RETRIES retries for distance: $distance m"
-      return 1
-    fi
-  done
+  sleep "$SLEEP_WAIT"
+  set_and_verify_distance "$distance"
 }
 
 num_success=0

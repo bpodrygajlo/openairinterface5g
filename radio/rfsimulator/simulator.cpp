@@ -111,17 +111,21 @@ static int rfsimu_getdistance_cmd(char *buff, int debug, telnet_printfunc_t prnt
 static int rfsimu_vtime_cmd(char *buff, int debug, telnet_printfunc_t prnt, void *arg);
 static int rfsimu_set_beamids(char *buff, int debug, telnet_printfunc_t prnt, void *arg);
 // clang-format off
+// None of these commands are pushed to telnetsrv's thread-pool queue (TELNETSRV_CMDFLAG_PUSHINTPOOLQ):
+// that queue decouples execution from the requesting connection, so the response can end up
+// written to an already-closed (or worse, a different, unrelated) socket. Instead, these
+// functions respond synchronously and defer any state mutation to rfsimulator's own queue,
+// applied by the RF thread (see apply_pending_rfsimu_cmds()/publish_rfsimu_status_snapshot()).
 static telnetshell_cmddef_t rfsimu_cmdarray[] = {
     {"show models", "", (cmdfunc_t)rfsimu_setchanmod_cmd, {(webfunc_t)getset_currentchannels_type}, TELNETSRV_CMDFLAG_WEBSRVONLY | TELNETSRV_CMDFLAG_GETWEBTBLDATA, NULL},
-    {"setmodel", "<model name> <model type>", (cmdfunc_t)rfsimu_setchanmod_cmd, {NULL}, TELNETSRV_CMDFLAG_PUSHINTPOOLQ | TELNETSRV_CMDFLAG_TELNETONLY, NULL},
-    {"setdistance", "<model name> <distance>", (cmdfunc_t)rfsimu_setdistance_cmd, {NULL}, TELNETSRV_CMDFLAG_PUSHINTPOOLQ | TELNETSRV_CMDFLAG_NEEDPARAM },
-    {"getdistance", "<model name>", (cmdfunc_t)rfsimu_getdistance_cmd, {NULL}, TELNETSRV_CMDFLAG_PUSHINTPOOLQ},
-    {"vtime", "", (cmdfunc_t)rfsimu_vtime_cmd, {NULL}, TELNETSRV_CMDFLAG_PUSHINTPOOLQ | TELNETSRV_CMDFLAG_AUTOUPDATE},
-    {"setbeamids", "beam_id1,beam_id2,...", (cmdfunc_t)rfsimu_set_beamids, {NULL}, TELNETSRV_CMDFLAG_PUSHINTPOOLQ},
+    {"setmodel", "<model name> <model type>", (cmdfunc_t)rfsimu_setchanmod_cmd, {NULL}, TELNETSRV_CMDFLAG_TELNETONLY, NULL},
+    {"setdistance", "<model name> <distance>", (cmdfunc_t)rfsimu_setdistance_cmd, {NULL}, TELNETSRV_CMDFLAG_NEEDPARAM },
+    {"getdistance", "<model name>", (cmdfunc_t)rfsimu_getdistance_cmd, {NULL}, 0},
+    {"vtime", "", (cmdfunc_t)rfsimu_vtime_cmd, {NULL}, TELNETSRV_CMDFLAG_AUTOUPDATE},
+    {"setbeamids", "beam_id1,beam_id2,...", (cmdfunc_t)rfsimu_set_beamids, {NULL}, 0},
     {"", "", NULL},
 };
 // clang-format on
-static telnetshell_cmddef_t *setmodel_cmddef = &(rfsimu_cmdarray[1]);
 
 static telnetshell_vardef_t rfsimu_vardef[] = {{"", 0, 0, NULL}};
 typedef c16_t sample_t; // 2*16 bits complex number
@@ -136,6 +140,43 @@ typedef struct {
   std::queue<beam_switch_command_t> cmd_queue;
   std::mutex mutex;
 } beam_state_t;
+
+// A telnet/websrv-issued command (setdistance/setmodel) that has been validated and
+// acknowledged to the caller, but whose actual application to shared RF-thread-owned state
+// (channel_desc_t, buffer_t::channel_model) is deferred until the RF thread picks it up, so
+// that mutation stays confined to the thread that already owns that data.
+enum rfsimu_pending_cmd_type_t { RFSIMU_CMD_SETDISTANCE, RFSIMU_CMD_SETMODEL };
+
+typedef struct {
+  rfsimu_pending_cmd_type_t type;
+  std::string model_name;
+  uint64_t offset; // RFSIMU_CMD_SETDISTANCE
+  double delay_ms; // RFSIMU_CMD_SETDISTANCE
+  int channelmod; // RFSIMU_CMD_SETMODEL
+} rfsimu_pending_cmd_t;
+
+typedef struct {
+  std::queue<rfsimu_pending_cmd_t> queue;
+  std::mutex mutex;
+} rfsimu_pending_cmdqueue_t;
+
+// Read-only snapshot of RF-thread-owned state, published once per RX cycle, so that
+// query-only telnet/websrv commands (getdistance/vtime) can answer synchronously and
+// immediately without racing the RF thread for buffer_t/channel_desc_t access.
+typedef struct {
+  bool valid;
+  std::string model_name;
+  uint64_t offset;
+} rfsimu_buf_snapshot_t;
+
+typedef struct {
+  uint64_t chan_offset;
+  double prop_delay_ms;
+  openair0_timestamp_t nextRxTstamp;
+  double sample_rate;
+  rfsimu_buf_snapshot_t per_buf[MAX_FD_RFSIMU];
+  std::mutex mutex;
+} rfsimu_status_snapshot_t;
 
 typedef struct {
   samplesBlockHeader_t header;
@@ -187,12 +228,18 @@ typedef struct {
   double chan_pathloss;
   double chan_forgetfact;
   uint64_t chan_offset;
-  void *telnetcmd_qid;
-  poll_telnetcmdq_func_t poll_telnetcmdq;
   int wait_timeout;
   double prop_delay_ms;
   rfsim_beam_ctrl_t *beam_ctrl;
+  rfsimu_pending_cmdqueue_t *pending_cmds;
+  rfsimu_status_snapshot_t *status_snapshot;
 } rfsimulator_state_t;
+
+// rfsimulator is a process-wide singleton (device_init() is called exactly once per
+// process); synchronously-dispatched telnet/websrv commands (see rfsimu_cmdarray) use this
+// instead of their unused "arg" parameter, since only the queued dispatch path
+// (telnetsrv's PUSHINTPOOLQ) actually supplies it.
+static rfsimulator_state_t *g_rfsimulator;
 
 /**
  * @brief Get the current beam map for a given timestamp and number of samples.
@@ -558,7 +605,8 @@ static void rfsimulator_readconfig(rfsimulator_state_t *rfsimulator)
 static int rfsimu_set_beamids(char *buff, int debug, telnet_printfunc_t prnt, void *arg)
 {
   UNUSED(debug);
-  rfsimulator_state_t *t = (rfsimulator_state_t *)arg;
+  UNUSED(arg);
+  rfsimulator_state_t *t = g_rfsimulator;
   rfsim_beam_ctrl_t *beam_ctrl = t->beam_ctrl;
   AssertFatal(beam_ctrl->enable_beams, "Beam simualtion is disabled, cannot set beams\n");
   std::vector<uint16_t> beam_ids;
@@ -577,9 +625,10 @@ static int rfsimu_set_beamids(char *buff, int debug, telnet_printfunc_t prnt, vo
 
 static int rfsimu_setchanmod_cmd(char *buff, int debug, telnet_printfunc_t prnt, void *arg)
 {
+  UNUSED(arg);
   char *modelname = NULL;
   char *modeltype = NULL;
-  rfsimulator_state_t *t = (rfsimulator_state_t *)arg;
+  rfsimulator_state_t *t = g_rfsimulator;
   if (t->channelmod == false) {
     prnt("%s: ERROR channel modelisation disabled...\n", __func__);
     return 0;
@@ -595,45 +644,15 @@ static int rfsimu_setchanmod_cmd(char *buff, int debug, telnet_printfunc_t prnt,
   if (s == 2) {
     int channelmod = modelid_fromstrtype(modeltype);
 
-    if (channelmod < 0)
+    if (channelmod < 0) {
       prnt("%s: ERROR: model type %s unknown\n", __func__, modeltype);
-    else {
-      rfsimulator_state_t *t = (rfsimulator_state_t *)arg;
-      int found = 0;
-      for (int i = 0; i < MAX_FD_RFSIMU; i++) {
-        buffer_t *b = &t->buf[i];
-        if (b->channel_model == NULL)
-          continue;
-        if (b->channel_model->model_name == NULL)
-          continue;
-        if (b->conn_sock >= 0 && (strcmp(b->channel_model->model_name, modelname) == 0)) {
-          channel_desc_t *newmodel = new_channel_desc_scm(t->tx_num_channels,
-                                                          t->rx_num_channels,
-                                                          static_cast<SCM_t>(channelmod),
-                                                          t->sample_rate,
-                                                          t->rx_freq,
-                                                          t->tx_bw,
-                                                          30e-9, // TDL delay-spread parameter
-                                                          0.0,
-                                                          CORR_LEVEL_LOW,
-                                                          t->chan_forgetfact, // forgetting_factor
-                                                          t->chan_offset, // propagation delay in samples
-                                                          t->chan_pathloss,
-                                                          0); // noise_power
-          set_channeldesc_owner(newmodel, RFSIMU_MODULEID);
-          set_channeldesc_direction(newmodel, t->role == SIMU_ROLE_SERVER);
-          set_channeldesc_name(newmodel, modelname);
-          random_channel(newmodel, false);
-          channel_desc_t *oldmodel = b->channel_model;
-          b->channel_model = newmodel;
-          free_channel_desc_scm(oldmodel);
-          prnt("%s: New model type %s applied to channel %s connected to sock %d\n", __func__, modeltype, modelname, i);
-          found = 1;
-          break;
-        }
-      } /* for */
-      if (found == 0)
-        prnt("%s: Channel %s not found or not currently used\n", __func__, modelname);
+    } else {
+      // Respond immediately, while the connection that issued this command is still open.
+      // The channel_desc_t swap below touches data owned by the RF sample-processing
+      // thread, so it is deferred and applied there (see apply_pending_rfsimu_cmds()).
+      prnt("%s: model type %s for channel %s queued for application\n", __func__, modeltype, modelname);
+      std::lock_guard<std::mutex> lock(t->pending_cmds->mutex);
+      t->pending_cmds->queue.push({RFSIMU_CMD_SETMODEL, modelname, 0, 0.0, channelmod});
     }
   } else {
     prnt("%s: ERROR: 2 parameters required: model name and model type (%i found)\n", __func__, s);
@@ -649,8 +668,7 @@ static void getset_currentchannels_type(char *buf, int debug, webdatadef_t *tdat
   if (strncmp(buf, "set", 3) == 0) {
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "setmodel %s %s", tdata->lines[0].val[1], tdata->lines[0].val[3]);
-    push_telnetcmd_func_t push_telnetcmd = (push_telnetcmd_func_t)get_shlibmodule_fptr("telnetsrv", TELNET_PUSHCMD_FNAME);
-    push_telnetcmd(setmodel_cmddef, cmd, prnt);
+    rfsimu_setchanmod_cmd(cmd, debug, prnt, NULL);
   } else {
     get_currentchannels_type("modify type", debug, tdata, prnt);
   }
@@ -658,6 +676,7 @@ static void getset_currentchannels_type(char *buf, int debug, webdatadef_t *tdat
 
 static int rfsimu_setdistance_cmd(char *buff, int debug, telnet_printfunc_t prnt, void *arg)
 {
+  UNUSED(arg);
   if (debug)
     prnt("%s() buffer \"%s\"\n", __func__, buff);
 
@@ -669,7 +688,7 @@ static int rfsimu_setdistance_cmd(char *buff, int debug, telnet_printfunc_t prnt
     return CMDSTATUS_VARNOTFOUND;
   }
 
-  rfsimulator_state_t *t = (rfsimulator_state_t *)arg;
+  rfsimulator_state_t *t = g_rfsimulator;
   const double sample_rate = t->sample_rate;
   const double c = (double)SPEED_OF_LIGHT;
 
@@ -677,22 +696,15 @@ static int rfsimu_setdistance_cmd(char *buff, int debug, telnet_printfunc_t prnt
   const double new_distance = (double)new_offset * c / sample_rate;
   const double new_delay_ms = new_offset * 1000.0 / sample_rate;
 
+  // Respond immediately, while the connection that issued this command is still open. The
+  // state mutation below touches data owned by the RF sample-processing thread, so it is
+  // deferred and applied there (see apply_pending_rfsimu_cmds()) -- decoupled from the
+  // (unreliable) telnet response path, but applied with the same timing as before.
   prnt("\n%s: new_offset %lu, new (exact) distance %.3f m, new delay %f ms\n", __func__, new_offset, new_distance, new_delay_ms);
-  t->prop_delay_ms = new_delay_ms;
-  t->chan_offset = new_offset;
 
-  /* Set distance in rfsim and channel model, update channel and ringbuffer */
-  for (int i = 0; i < MAX_FD_RFSIMU; i++) {
-    buffer_t *b = &t->buf[i];
-    if (b->conn_sock <= 0 || b->channel_model == NULL || b->channel_model->model_name == NULL
-        || strcmp(b->channel_model->model_name, modelname) != 0) {
-      if (b->channel_model != NULL && b->channel_model->model_name != NULL)
-        prnt("  %s: model %s unmodified\n", __func__, b->channel_model->model_name);
-      continue;
-    }
-
-    channel_desc_t *cd = b->channel_model;
-    cd->channel_offset = new_offset;
+  {
+    std::lock_guard<std::mutex> lock(t->pending_cmds->mutex);
+    t->pending_cmds->queue.push({RFSIMU_CMD_SETDISTANCE, modelname, new_offset, new_delay_ms, 0});
   }
 
   free(modelname);
@@ -702,24 +714,24 @@ static int rfsimu_setdistance_cmd(char *buff, int debug, telnet_printfunc_t prnt
 
 static int rfsimu_getdistance_cmd(char *buff, int debug, telnet_printfunc_t prnt, void *arg)
 {
+  UNUSED(arg);
   if (debug)
     prnt("%s() buffer \"%s\"\n", __func__, (buff != NULL) ? buff : "NULL");
 
-  rfsimulator_state_t *t = (rfsimulator_state_t *)arg;
-  const double sample_rate = t->sample_rate;
+  rfsimulator_state_t *t = g_rfsimulator;
   const double c = (double)SPEED_OF_LIGHT;
 
+  std::lock_guard<std::mutex> lock(t->status_snapshot->mutex);
+  const double sample_rate = t->status_snapshot->sample_rate;
   for (int i = 0; i < MAX_FD_RFSIMU; i++) {
-    buffer_t *b = &t->buf[i];
-    if (b->conn_sock <= 0 || b->channel_model == NULL || b->channel_model->model_name == NULL)
+    const rfsimu_buf_snapshot_t &snap = t->status_snapshot->per_buf[i];
+    if (!snap.valid)
       continue;
 
-    channel_desc_t *cd = b->channel_model;
-    const uint64_t offset = cd->channel_offset;
-    const double distance = (double)offset * c / sample_rate;
-    prnt("%s: %s offset %lu distance %.3f m\n", __func__, cd->model_name, offset, distance);
+    const double distance = (double)snap.offset * c / sample_rate;
+    prnt("%s: %s offset %lu distance %.3f m\n", __func__, snap.model_name.c_str(), snap.offset, distance);
   }
-  prnt("%s: <default> offset %lu delay %f ms\n", __func__, t->chan_offset, t->prop_delay_ms);
+  prnt("%s: <default> offset %lu delay %f ms\n", __func__, t->status_snapshot->chan_offset, t->status_snapshot->prop_delay_ms);
 
   return CMDSTATUS_FOUND;
 }
@@ -728,11 +740,105 @@ static int rfsimu_vtime_cmd(char *buff, int debug, telnet_printfunc_t prnt, void
 {
   UNUSED(debug);
   UNUSED(buff);
-  rfsimulator_state_t *t = (rfsimulator_state_t *)arg;
-  const openair0_timestamp_t ts = t->nextRxTstamp;
-  const double sample_rate = t->sample_rate;
-  prnt("%s: vtime measurement: TS %llu sample_rate %.3f\n", __func__, ts, sample_rate);
+  UNUSED(arg);
+  rfsimulator_state_t *t = g_rfsimulator;
+  std::lock_guard<std::mutex> lock(t->status_snapshot->mutex);
+  prnt("%s: vtime measurement: TS %llu sample_rate %.3f\n",
+       __func__,
+       (unsigned long long)t->status_snapshot->nextRxTstamp,
+       t->status_snapshot->sample_rate);
   return CMDSTATUS_FOUND;
+}
+
+// Applies telnet/websrv-queued state mutations (setdistance/setmodel) that were validated
+// and acknowledged synchronously by their caller. Must only be called from the RF
+// sample-processing thread, since it touches buffer_t::channel_model / channel_desc_t.
+static void apply_pending_rfsimu_cmds(rfsimulator_state_t *t)
+{
+  std::queue<rfsimu_pending_cmd_t> pending;
+  {
+    std::lock_guard<std::mutex> lock(t->pending_cmds->mutex);
+    std::swap(pending, t->pending_cmds->queue);
+  }
+
+  while (!pending.empty()) {
+    const rfsimu_pending_cmd_t &cmd = pending.front();
+    switch (cmd.type) {
+      case RFSIMU_CMD_SETDISTANCE: {
+        t->prop_delay_ms = cmd.delay_ms;
+        t->chan_offset = cmd.offset;
+        for (int i = 0; i < MAX_FD_RFSIMU; i++) {
+          buffer_t *b = &t->buf[i];
+          if (b->conn_sock <= 0 || b->channel_model == NULL || b->channel_model->model_name == NULL
+              || cmd.model_name != b->channel_model->model_name)
+            continue;
+          b->channel_model->channel_offset = cmd.offset;
+        }
+        break;
+      }
+      case RFSIMU_CMD_SETMODEL: {
+        int found = 0;
+        for (int i = 0; i < MAX_FD_RFSIMU; i++) {
+          buffer_t *b = &t->buf[i];
+          if (b->channel_model == NULL || b->channel_model->model_name == NULL)
+            continue;
+          if (b->conn_sock < 0 || cmd.model_name != b->channel_model->model_name)
+            continue;
+
+          channel_desc_t *newmodel = new_channel_desc_scm(t->tx_num_channels,
+                                                            t->rx_num_channels,
+                                                            static_cast<SCM_t>(cmd.channelmod),
+                                                            t->sample_rate,
+                                                            t->rx_freq,
+                                                            t->tx_bw,
+                                                            30e-9, // TDL delay-spread parameter
+                                                            0.0,
+                                                            CORR_LEVEL_LOW,
+                                                            t->chan_forgetfact, // forgetting_factor
+                                                            t->chan_offset, // propagation delay in samples
+                                                            t->chan_pathloss,
+                                                            0); // noise_power
+          set_channeldesc_owner(newmodel, RFSIMU_MODULEID);
+          set_channeldesc_direction(newmodel, t->role == SIMU_ROLE_SERVER);
+          set_channeldesc_name(newmodel, const_cast<char *>(cmd.model_name.c_str()));
+          random_channel(newmodel, false);
+          channel_desc_t *oldmodel = b->channel_model;
+          b->channel_model = newmodel;
+          free_channel_desc_scm(oldmodel);
+          LOG_I(HW, "%s: new model applied to channel %s connected to sock %d\n", __func__, cmd.model_name.c_str(), i);
+          found = 1;
+          break;
+        }
+        if (!found)
+          LOG_W(HW, "%s: channel %s not found or not currently used\n", __func__, cmd.model_name.c_str());
+        break;
+      }
+    }
+    pending.pop();
+  }
+}
+
+// Publishes a read-only snapshot of RF-thread-owned state for query-only telnet/websrv
+// commands (getdistance/vtime) to read synchronously without racing buffer_t/channel_desc_t
+// accesses on this (the RF sample-processing) thread. Must only be called from that thread.
+static void publish_rfsimu_status_snapshot(rfsimulator_state_t *t)
+{
+  std::lock_guard<std::mutex> lock(t->status_snapshot->mutex);
+  t->status_snapshot->chan_offset = t->chan_offset;
+  t->status_snapshot->prop_delay_ms = t->prop_delay_ms;
+  t->status_snapshot->nextRxTstamp = t->nextRxTstamp;
+  t->status_snapshot->sample_rate = t->sample_rate;
+  for (int i = 0; i < MAX_FD_RFSIMU; i++) {
+    buffer_t *b = &t->buf[i];
+    rfsimu_buf_snapshot_t &snap = t->status_snapshot->per_buf[i];
+    if (b->conn_sock > 0 && b->channel_model != NULL && b->channel_model->model_name != NULL) {
+      snap.valid = true;
+      snap.model_name = b->channel_model->model_name;
+      snap.offset = b->channel_model->channel_offset;
+    } else {
+      snap.valid = false;
+    }
+  }
 }
 
 static int startServer(openair0_device_t *device)
@@ -1361,8 +1467,8 @@ static int rfsimulator_read(openair0_device_t *device, openair0_timestamp_t *pti
     }
   }
 
-  if (t->poll_telnetcmdq)
-    t->poll_telnetcmdq(t->telnetcmd_qid, t);
+  apply_pending_rfsimu_cmds(t);
+  publish_rfsimu_status_snapshot(t);
 
   // Clear the output buffer
   for (int a = 0; a < nbAnt; a++)
@@ -1444,6 +1550,8 @@ static void rfsimulator_end(openair0_device_t *device)
   clear_beam_queue(&s->beam_ctrl->tx, INT64_MAX);
   clear_beam_queue(&s->beam_ctrl->rx, INT64_MAX);
   delete s->beam_ctrl;
+  delete s->pending_cmds;
+  delete s->status_snapshot;
   close(s->epollfd);
   free(s);
 }
@@ -1484,6 +1592,7 @@ extern "C" __attribute__((__visibility__("default"))) int device_init(openair0_d
   // to change the log level, use this on command line
   // --log_config.hw_log_level debug
   rfsimulator_state_t *rfsimulator = static_cast<rfsimulator_state_t *>(calloc(sizeof(rfsimulator_state_t), 1));
+  g_rfsimulator = rfsimulator;
   // initialize channel simulation
   rfsimulator->ru_id = openair0_cfg->ru_id;
   rfsimulator->tx_num_channels = openair0_cfg->tx_num_channels;
@@ -1492,6 +1601,8 @@ extern "C" __attribute__((__visibility__("default"))) int device_init(openair0_d
   rfsimulator->rx_freq = openair0_cfg->rx_freq[0];
   rfsimulator->tx_bw = openair0_cfg->tx_bw;
   rfsimulator->beam_ctrl = new rfsim_beam_ctrl_t;
+  rfsimulator->pending_cmds = new rfsimu_pending_cmdqueue_t;
+  rfsimulator->status_snapshot = new rfsimu_status_snapshot_t;
   rfsimulator_readconfig(rfsimulator);
   if (rfsimulator->prop_delay_ms > 0.0)
     rfsimulator->chan_offset = ceil(rfsimulator->sample_rate * rfsimulator->prop_delay_ms / 1000);
@@ -1535,15 +1646,7 @@ extern "C" __attribute__((__visibility__("default"))) int device_init(openair0_d
   add_telnetcmd_func_t addcmd = (add_telnetcmd_func_t)get_shlibmodule_fptr("telnetsrv", TELNET_ADDCMD_FNAME);
 
   if (addcmd != NULL) {
-    rfsimulator->poll_telnetcmdq = (poll_telnetcmdq_func_t)get_shlibmodule_fptr("telnetsrv", TELNET_POLLCMDQ_FNAME);
     addcmd("rfsimu", rfsimu_vardef, rfsimu_cmdarray);
-
-    for (int i = 0; rfsimu_cmdarray[i].cmdfunc != NULL; i++) {
-      if (rfsimu_cmdarray[i].qptr != NULL) {
-        rfsimulator->telnetcmd_qid = rfsimu_cmdarray[i].qptr;
-        break;
-      }
-    }
   }
 
   /* write on a socket fails if the other end is closed and we get SIGPIPE */
