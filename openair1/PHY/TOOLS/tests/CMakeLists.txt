@@ -52,6 +52,60 @@ add_test(NAME test_sse_intrinsics
 add_executable(benchmark_channel_pipeline benchmark_channel_pipeline.cpp test_channel_pipeline_tools.c)
 target_link_libraries(benchmark_channel_pipeline PRIVATE UTIL SIMU PHY_COMMON LOG CONFIG_LIB shlib_loader m channel_pipeline benchmark::benchmark thread-pool)
 
+# Optional: Mojo channel-convolution kernels for benchmark_channel_pipeline.
+# Not part of any normal OAI dependency chain - only enabled when a `mojo`
+# compiler is on PATH (e.g. a Modular/Mojo venv has been activated before
+# running cmake). See mojo/README.md for setup instructions.
+find_program(MOJO_EXECUTABLE mojo)
+if(MOJO_EXECUTABLE)
+  message(STATUS "Found mojo: ${MOJO_EXECUTABLE} - enabling Mojo channel-pipeline benchmark kernels")
+  set(MOJO_KERNEL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/mojo/channel_pipeline_mojo_kernel.mojo)
+  set(MOJO_KERNEL_LIB ${CMAKE_CURRENT_BINARY_DIR}/libmojo_channel_kernel.so)
+  add_custom_command(
+    OUTPUT ${MOJO_KERNEL_LIB}
+    COMMAND ${MOJO_EXECUTABLE} build ${MOJO_KERNEL_SRC} --emit shared-lib -o ${MOJO_KERNEL_LIB}
+    DEPENDS ${MOJO_KERNEL_SRC}
+    COMMENT "Building Mojo channel-convolution kernel (${MOJO_KERNEL_LIB})"
+    VERBATIM)
+  add_custom_target(mojo_channel_kernel DEPENDS ${MOJO_KERNEL_LIB})
+
+  add_dependencies(benchmark_channel_pipeline mojo_channel_kernel)
+  target_compile_definitions(benchmark_channel_pipeline PRIVATE CHANNEL_SIM_MOJO)
+  target_include_directories(benchmark_channel_pipeline PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/mojo)
+  target_link_libraries(benchmark_channel_pipeline PRIVATE ${MOJO_KERNEL_LIB} pthread)
+else()
+  message(STATUS "mojo compiler not found - skipping Mojo channel-pipeline benchmark kernels")
+endif()
+
+# Optional: Zig channel-convolution kernels for benchmark_channel_pipeline,
+# same idea as the Mojo block above - only enabled when a `zig` compiler
+# is on PATH. See zig/README.md (in ../mojo/README.md's GPU/CPU comparison
+# notes) for what this compares against.
+find_program(ZIG_EXECUTABLE zig)
+if(ZIG_EXECUTABLE)
+  message(STATUS "Found zig: ${ZIG_EXECUTABLE} - enabling Zig channel-pipeline benchmark kernels")
+  set(ZIG_KERNEL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/zig/channel_pipeline_zig_kernel.zig)
+  # Filename must match the SONAME zig derives from the source filename
+  # ("lib" + module name + ".so") or the dynamic linker won't find it at
+  # runtime under the name embedded in the .so.
+  set(ZIG_KERNEL_LIB ${CMAKE_CURRENT_BINARY_DIR}/libchannel_pipeline_zig_kernel.so)
+  add_custom_command(
+    OUTPUT ${ZIG_KERNEL_LIB}
+    COMMAND ${ZIG_EXECUTABLE} build-lib ${ZIG_KERNEL_SRC} -dynamic -O ReleaseFast -mcpu=native
+            -femit-bin=${ZIG_KERNEL_LIB}
+    DEPENDS ${ZIG_KERNEL_SRC}
+    COMMENT "Building Zig channel-convolution kernel (${ZIG_KERNEL_LIB})"
+    VERBATIM)
+  add_custom_target(zig_channel_kernel DEPENDS ${ZIG_KERNEL_LIB})
+
+  add_dependencies(benchmark_channel_pipeline zig_channel_kernel)
+  target_compile_definitions(benchmark_channel_pipeline PRIVATE CHANNEL_SIM_ZIG)
+  target_include_directories(benchmark_channel_pipeline PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/zig)
+  target_link_libraries(benchmark_channel_pipeline PRIVATE ${ZIG_KERNEL_LIB})
+else()
+  message(STATUS "zig compiler not found - skipping Zig channel-pipeline benchmark kernels")
+endif()
+
 add_executable(test_channel_pipeline test_channel_pipeline.cpp test_channel_pipeline_tools.c)
 target_link_libraries(test_channel_pipeline PRIVATE UTIL SIMU PHY_COMMON LOG CONFIG_LIB shlib_loader m channel_pipeline GTest::gtest thread-pool)
 
