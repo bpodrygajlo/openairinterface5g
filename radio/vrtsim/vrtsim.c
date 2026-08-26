@@ -1116,6 +1116,9 @@ __attribute__((__visibility__("default"))) int device_init(openair0_device_t *de
   device->trx_write_func = vrtsim_write;
   device->trx_read_func = vrtsim_read;
   device->trx_set_beams = vrtsim_set_beams;
+  if (vrtsim_state->role == ROLE_SERVER) {
+    device->get_timestamp = vrtsim_get_timestamp;
+  }
 
   device->type = RFSIMULATOR;
   device->openair0_cfg = &openair0_cfg[0];
