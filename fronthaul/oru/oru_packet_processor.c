@@ -544,6 +544,10 @@ static void handle_ul_cplane_packet(oru_packet_processor_context_t *ctx,
   int slot_in_frame = hdr->cmnhdr.field.slotId + hdr->cmnhdr.field.subframeId * (1 << numerology);
   uint32_t start_symbol = hdr->cmnhdr.field.startSymbolId;
   int num_symbols = section->hdr.u.s1.numSymbol;
+  if (num_symbols <= 0) {
+    ctx->stats.ul_cplane_err_invalid_num_symbols++;
+    return;
+  }
   int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * (1 << numerology) * NR_SYMBOLS_PER_SLOT;
   uint64_t symbol_in_frame = slot_in_frame * 14 + start_symbol;
   uint32_t current_symbol_in_frame = ctx->current_absolute_symbol % num_symbols_per_frame;
@@ -826,6 +830,8 @@ void print_packet_processor_stats(void *context)
     LOG_I(HW, "  UL TDD Mismatch Errors: %lu\n", ctx->stats.ul_tdd_mismatch + ctx->thread_safe_stats.ul_tdd_mismatch);
   if (ctx->stats.ul_cplane_missing + ctx->thread_safe_stats.ul_cplane_missing > 0)
     LOG_I(HW, "  UL C-Plane Missing Errors: %lu\n", ctx->stats.ul_cplane_missing + ctx->thread_safe_stats.ul_cplane_missing);
+  if (ctx->stats.ul_cplane_err_invalid_num_symbols > 0)
+    LOG_I(HW, "  UL C-Plane Invalid numSymbol Errors: %lu\n", ctx->stats.ul_cplane_err_invalid_num_symbols);
   if (ctx->stats.prach_cplane_missing + ctx->thread_safe_stats.prach_cplane_missing > 0)
     LOG_I(HW,
           "  PRACH C-Plane Missing Errors: %lu (Never Received: %lu, Stale: %lu, Early: %lu)\n",
