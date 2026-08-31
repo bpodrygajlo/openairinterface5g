@@ -86,6 +86,7 @@ typedef struct {
   int num_prb;
   int start_prb;
   int filter_id;
+  uint16_t beam_id; // section type 3 beamId: the PRACH beam for this stream (UL Rx beamforming)
   fh_comp_method_t comp_method;
   uint8_t iq_width;
 } prach_job_t;
@@ -740,6 +741,7 @@ static void handle_ul_cplane_packet(oru_packet_processor_context_t *ctx,
     ul_job->symbol = absolute_gps_symbol % 14;
     ul_job->num_symbols = num_symbols;
     ul_job->antenna_id = ant_id;
+    ul_job->beam_id = section->hdr.u.s1.beamId;
     ul_job->num_prb = section->hdr.u1.common.numPrbc == 0 ? ctx->num_prb : section->hdr.u1.common.numPrbc;
     ul_job->start_prb = section->hdr.u1.common.startPrbc;
     int ret = rte_ring_enqueue(ctx->ul_ready_jobs, (void *)ul_job);
@@ -819,6 +821,7 @@ void handle_prach_cplane_packet(oru_packet_processor_context_t *ctx,
   job->num_prb = section->hdr.u1.common.numPrbc == 0 ? ctx->num_prb : section->hdr.u1.common.numPrbc;
   job->start_prb = section->hdr.u1.common.startPrbc;
   job->filter_id = hdr->cmnhdr.field.filterIndex;
+  job->beam_id = section->hdr.u.s3.beamId;
   job->comp_method = (fh_comp_method_t)hdr->udComp.udCompMeth;
   job->iq_width = hdr->udComp.udIqWidth == 0 ? XRAN_IQ_BITS_UNCOMPRESSED : hdr->udComp.udIqWidth;
   RATELIMIT(PRACH_ERR_LOG_RATELIMIT, {
@@ -1120,6 +1123,15 @@ int read_dl_iq_streams(void *context,
               "Failed to enqueue to ring dl_free_jobs. dl_free_jobs num_elements %d\n",
               rte_ring_count(ctx->dl_free_jobs));
   return out_count;
+}
+
+int get_prach_beam_id(void *context, int slot_in_frame, int aarx)
+{
+  oru_packet_processor_context_t *ctx = (oru_packet_processor_context_t *)context;
+  if (ctx == NULL || slot_in_frame < 0 || slot_in_frame >= MAX_SLOTS_PER_FRAME || aarx < 0 || aarx >= MAX_ANTENNAS)
+    return -1;
+  const prach_job_t *job = &ctx->prach_jobs[slot_in_frame][aarx];
+  return job->active ? job->beam_id : -1;
 }
 
 int get_ready_job_count(void *context)

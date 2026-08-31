@@ -52,7 +52,8 @@ typedef struct {
   int slot_in_frame;
   int symbol;
   int num_symbols;
-  int antenna_id;
+  int antenna_id; // eaxc: physical RX antenna (passthrough) or beam output stream (codebook)
+  uint16_t beam_id; // beam this section was declared under (UL Rx beamforming)
   int start_prb;
   int num_prb;
 } ul_job_t;
@@ -148,6 +149,9 @@ int read_dl_iq_streams(void *context,
                        int *frame,
                        int *slot,
                        int *symbol);
+// Beam the DU declared (C-Plane section type 3 beamId) for PRACH stream `aarx` in `slot_in_frame`,
+// or -1 when no PRACH C-Plane is active there. write_prach_iq() still does the full timing check.
+int get_prach_beam_id(void *context, int slot_in_frame, int aarx);
 int get_ready_job_count(void *context);
 int poll_ul_job(void *context, ul_job_t *job);
 void get_dl_symbol_bitmask(void *context, const uint8_t **bitmask, uint16_t *bit_length);

@@ -135,6 +135,16 @@ void oru_fh_rx_send_prach(void *handle, uint32_t **prachF, int nb_rx, int frame,
 int oru_fh_poll_ul_job(void *handle, ul_job_t *job);
 
 /**
+ * @brief Beam the DU declared for a PRACH stream (C-Plane section type 3 beamId).
+ *
+ * @param handle Pointer to the fronthaul handle.
+ * @param slot Slot in frame.
+ * @param stream PRACH stream (eAxC minus the PRACH eAxC offset).
+ * @return The beam id, or -1 when no PRACH C-Plane is active for that slot and stream.
+ */
+int oru_fh_get_prach_beam_id(void *handle, int slot, int stream);
+
+/**
  * @brief Get the DL-direction symbol bitmask for the configured TDD pattern.
  *
  * @param handle Pointer to the fronthaul handle.
