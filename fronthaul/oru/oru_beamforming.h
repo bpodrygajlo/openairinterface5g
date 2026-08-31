@@ -42,6 +42,34 @@ void combine_dl_streams(c16_t **txDataF,
                         const oru_codebook_t *cb,
                         c16_t rotation);
 
+// UL Rx beamforming: combine per-antenna FFT output into one beam stream over bins [k0, k0 + nk),
+// out[k] = sum_a conj(w[beam][a][stream]) * fft_data[a][k]. The codebook holds transmit weights: a
+// UE in the direction of DL beam w is received through a channel proportional to w, so the matched
+// receive combiner for the same beam is w^H. Bins outside the range are left untouched.
+void combine_ul_beam_fd(const c16_t *const rxdataF[],
+                        int nb_rx,
+                        int k0,
+                        int nk,
+                        const oru_codebook_t *cb,
+                        int beam_id,
+                        int stream_id,
+                        c16_t *out);
+
+// combine_ul_beam_fd() over just the PRBs [start_prb, start_prb + num_prb) of an nbins-wide band,
+// with out and fft_data in unshifted FFT layout (fft_size bins). Contiguous RE c sits at bin
+// c < nbins / 2 ? fft_size - nbins / 2 + c : c - nbins / 2 (the inverse of fftshift()), so the range
+// covers at most two bin segments. The range is clamped to the band; other bins are left untouched.
+void combine_ul_beam_prbs(const c16_t *const fft_data[],
+                          int nb_rx,
+                          int fft_size,
+                          int nbins,
+                          int start_prb,
+                          int num_prb,
+                          const oru_codebook_t *cb,
+                          int beam_id,
+                          int stream_id,
+                          c16_t *out);
+
 #ifdef __cplusplus
 }
 #endif
