@@ -188,6 +188,7 @@ void test_cplane_timing_errors()
   apphdr->cmnhdr.field.subframeId = slot_in_frame / (1 << 1);
   apphdr->cmnhdr.field.slotId = slot_in_frame % (1 << 1);
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -261,6 +262,7 @@ void test_cplane_uplane_match()
   apphdr->cmnhdr.field.subframeId = slot_in_frame / slots_per_subframe;
   apphdr->cmnhdr.field.slotId = slot_in_frame % slots_per_subframe;
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -500,6 +502,7 @@ void test_dl_multi_section_same_beam()
     apphdr->cmnhdr.field.subframeId = subframeId;
     apphdr->cmnhdr.field.slotId = slotId;
     apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+    apphdr->cmnhdr.numOfSections = 1;
     apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
     apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -530,6 +533,7 @@ void test_dl_multi_section_same_beam()
     apphdr->cmnhdr.field.subframeId = subframeId;
     apphdr->cmnhdr.field.slotId = slotId;
     apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+    apphdr->cmnhdr.numOfSections = 1;
     apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
     apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -562,6 +566,7 @@ void test_dl_multi_section_same_beam()
     apphdr->cmnhdr.field.subframeId = subframeId;
     apphdr->cmnhdr.field.slotId = slotId;
     apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+    apphdr->cmnhdr.numOfSections = 1;
     apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
     apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -714,6 +719,7 @@ void test_frame_wrap_around()
   apphdr->cmnhdr.field.subframeId = slot_in_frame / slots_per_subframe;
   apphdr->cmnhdr.field.slotId = slot_in_frame % slots_per_subframe;
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -841,6 +847,7 @@ void test_cplane_14_symbols()
   apphdr->cmnhdr.field.subframeId = slot_in_frame / 2;
   apphdr->cmnhdr.field.slotId = slot_in_frame % 2;
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -989,6 +996,7 @@ void test_other_bw_4ant_prb_offset()
     apphdr->cmnhdr.field.subframeId = subframeId;
     apphdr->cmnhdr.field.slotId = slotId;
     apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+    apphdr->cmnhdr.numOfSections = 1;
     apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
     apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -1432,6 +1440,7 @@ void test_uplink_basic()
   apphdr->cmnhdr.field.subframeId = subframeId;
   apphdr->cmnhdr.field.slotId = slotId;
   apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -1524,6 +1533,7 @@ void test_uplink_fragmentation()
   apphdr->cmnhdr.field.subframeId = subframeId;
   apphdr->cmnhdr.field.slotId = slotId;
   apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -1617,6 +1627,7 @@ void test_uplink_large_mtu()
   apphdr->cmnhdr.field.subframeId = subframeId;
   apphdr->cmnhdr.field.slotId = slotId;
   apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -1709,6 +1720,7 @@ void test_uplink_prb_offset()
   apphdr->cmnhdr.field.subframeId = subframeId;
   apphdr->cmnhdr.field.slotId = slotId;
   apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -1950,6 +1962,7 @@ void test_hyper_frame_calculation()
   apphdr->cmnhdr.field.subframeId = slot_in_frame / slots_per_subframe;
   apphdr->cmnhdr.field.slotId = slot_in_frame % slots_per_subframe;
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
@@ -2060,6 +2073,7 @@ void test_dl_bfp_decompression(void)
   apphdr->cmnhdr.field.subframeId = slot_in_frame / slots_per_subframe;
   apphdr->cmnhdr.field.slotId = slot_in_frame % slots_per_subframe;
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
   struct xran_cp_radioapp_section1 *sec =
@@ -2178,6 +2192,7 @@ void test_ul_bfp_compression(void)
   apphdr->cmnhdr.field.subframeId = subframeId;
   apphdr->cmnhdr.field.slotId = slotId;
   apphdr->cmnhdr.field.startSymbolId = startSymbolId;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->udComp.udCompMeth = FH_COMP_BFP;
   apphdr->udComp.udIqWidth = XRAN_CONVERT_IQWIDTH(iq_bits);
@@ -2255,6 +2270,7 @@ void test_large_delay_profile()
   apphdr->cmnhdr.field.subframeId = slot_in_frame / slots_per_subframe;
   apphdr->cmnhdr.field.slotId = slot_in_frame % slots_per_subframe;
   apphdr->cmnhdr.field.startSymbolId = target_sym % 14;
+  apphdr->cmnhdr.numOfSections = 1;
   apphdr->cmnhdr.sectionType = XRAN_CP_SECTIONTYPE_1;
   apphdr->cmnhdr.field.all_bits = rte_cpu_to_be_32(apphdr->cmnhdr.field.all_bits);
 
