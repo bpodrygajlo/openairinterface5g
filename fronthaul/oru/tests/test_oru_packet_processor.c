@@ -1839,9 +1839,12 @@ void test_prach_generation(int prach_eaxc_offset, bool check_sequence)
   sec->hdr.u1.common.numPrbc = 20;
   sec->hdr.u1.common.startPrbc = 0;
   sec->hdr.u1.common.sectionId = 123;
+  sec->hdr.u.s3.beamId = 5;
   *((uint64_t *)sec) = rte_be_to_cpu_64(*((uint64_t *)sec));
 
   handle_cplane_packet(ctx, c_mbuf);
+  assert(get_prach_beam_id(ctx, slot_in_frame, 0) == 5); // section type 3 beamId carried to the job
+  assert(get_prach_beam_id(ctx, slot_in_frame, 1) == -1); // no C-Plane for this stream
 
   // 2. Call write_prach_iq for each of the 4 symbols
   uint32_t *txdataF[1];
