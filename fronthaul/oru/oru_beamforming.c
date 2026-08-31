@@ -81,3 +81,63 @@ void combine_dl_streams(c16_t **txDataF,
     combine_codebook(txDataF, nb_tx, n_sc, streams, num_streams, cb, rotation);
   }
 }
+
+void combine_ul_beam_fd(const c16_t *const fft_data[],
+                        int nb_rx,
+                        int k0,
+                        int nk,
+                        const oru_codebook_t *cb,
+                        int beam_id,
+                        int stream_id,
+                        c16_t *out)
+{
+  if (stream_id >= cb->nb_fh_streams) {
+    LOG_W(PHY, "UL stream %d exceeds nb_fh_streams %d, dropping\n", stream_id, cb->nb_fh_streams);
+    memset(&out[k0], 0, nk * sizeof(c16_t));
+    return;
+  }
+  int bidx = beam_id;
+  if (bidx >= cb->nb_beams) {
+    LOG_W(PHY, "beam_id %u out of range (nb_beams=%d), falling back to beam 0\n", beam_id, cb->nb_beams);
+    bidx = 0;
+  }
+  memset(&out[k0], 0, nk * sizeof(c16_t));
+  if (nb_rx > ORU_CODEBOOK_MAX_NB_TX) {
+    LOG_W(PHY, "nb_rx %d exceeds codebook antenna dimension %d, combining first %d antennas\n",
+          nb_rx, ORU_CODEBOOK_MAX_NB_TX, ORU_CODEBOOK_MAX_NB_TX);
+  }
+  const int nb_ant = nb_rx < ORU_CODEBOOK_MAX_NB_TX ? nb_rx : ORU_CODEBOOK_MAX_NB_TX;
+  for (int a = 0; a < nb_ant; a++) {
+    // Same per-bin saturating multiply-accumulate as the DL codebook path, with the conjugate
+    // (receive) weight: see the header for why UL uses w^H.
+    const c16_t w = cb->w[bidx][a][stream_id];
+    const c16_t w_rx = {.r = w.r, .i = w.i == INT16_MIN ? INT16_MAX : (int16_t)-w.i};
+    rotate_add_cpx_vector(&fft_data[a][k0], w_rx, &out[k0], nk, 15);
+  }
+}
+
+void combine_ul_beam_prbs(const c16_t *const fft_data[],
+                          int nb_rx,
+                          int fft_size,
+                          int nbins,
+                          int start_prb,
+                          int num_prb,
+                          const oru_codebook_t *cb,
+                          int beam_id,
+                          int stream_id,
+                          c16_t *out)
+{
+  const int half = nbins / 2;
+  int c0 = start_prb * NR_NB_SC_PER_RB;
+  int c1 = c0 + num_prb * NR_NB_SC_PER_RB;
+  c0 = c0 < nbins ? c0 : nbins;
+  c1 = c1 < nbins ? c1 : nbins;
+  if (c0 < half) { // negative-frequency half: the tail of the FFT window
+    const int end = c1 < half ? c1 : half;
+    combine_ul_beam_fd(fft_data, nb_rx, fft_size - half + c0, end - c0, cb, beam_id, stream_id, out);
+  }
+  if (c1 > half) { // DC and positive-frequency half: the head of the FFT window
+    const int lo = c0 > half ? c0 : half;
+    combine_ul_beam_fd(fft_data, nb_rx, lo - half, c1 - lo, cb, beam_id, stream_id, out);
+  }
+}
