@@ -40,6 +40,7 @@ python3 main.py --mode=TesteNB --repository=NONE --branch=${CURRENT_BRANCH} \
     --XMLTestFile=${TESTCASE} --local --datefmt="%H:%M:%S"
 RET=$?
 
-python3 main.py --mode=FinalizeHtml --local --datefmt="%H:%M:%S"
+[[ ${RET} -eq 0 ]] && STATUS=True || STATUS=False
+python3 main.py --mode=FinalizeHtml --finalStatus=${STATUS} --local --datefmt="%H:%M:%S"
 
 exit ${RET}
