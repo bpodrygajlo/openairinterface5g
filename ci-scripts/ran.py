@@ -80,7 +80,7 @@ class RAN():
 
 		return enbDidSync
 
-	def TerminateeNB(self, ctx, node, HTML, to_analyze):
+	def TerminateeNB(ctx, node, HTML, to_analyze):
 		logging.debug('Stopping eNB/gNB on server: ' + node)
 		lSourcePath = ctx.g.workspace
 		cmd = cls_cmd.getConnection(node)
@@ -115,7 +115,7 @@ class RAN():
 		success = cls_analysis.AnalyzeServices(HTML, service_desc, to_analyze)
 		return success
 
-	def AnalyzeRTStats(self, HTML, node, ctx, thresholds):
+	def AnalyzeRTStats(HTML, node, ctx, thresholds):
 		logging.info(f'Analyzing realtime stats from server: {node}')
 		lSourcePath = ctx.g.workspace
 

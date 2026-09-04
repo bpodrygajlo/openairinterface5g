@@ -58,7 +58,8 @@ def ExecuteActionWithParam(action, test, ctx, node, oc):
 		runtime_opt = test.findtext('runtime-opt') or ''
 		ctest_opt = test.findtext('ctest-opt') or ''
 		if action == 'Build_eNB':
-			success = cls_native.Native.Build(ctx, node, HTML, ctx.g.workspace, RAN.Build_eNB_args)
+			build_args = test.findtext('Build_eNB_args')
+			success = cls_native.Native.Build(ctx, node, HTML, ctx.g.workspace, build_args)
 		elif action == 'Build_Image':
 			success = CONTAINERS.BuildImage(ctx, node, HTML)
 		elif action == 'Build_Cluster_Image':
