@@ -407,6 +407,8 @@ elif mode == "all-in-one":
 				xmlTree = ET.parse(xml_test_file)
 			except Exception as e:
 				print(f"Error: {e} while parsing file: {xml_test_file}.")
+				count += 1
+				continue
 			xmlRoot = xmlTree.getroot()
 			HTML.htmlTabRefs.append(xmlRoot.findtext('htmlTabRef'))
 			HTML.htmlTabNames.append(xmlRoot.findtext('htmlTabName'))
