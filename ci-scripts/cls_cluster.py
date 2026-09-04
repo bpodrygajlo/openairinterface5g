@@ -136,14 +136,14 @@ class Cluster:
 			if not succeeded:
 				HTML.CreateHtmlTestRow('N/A', 'KO', CONST.OC_LOGIN_FAIL)
 				return False
-			ret = cmd.run(f'oc whoami -t | docker login -u oaicicd --password-stdin {oc.registry}')
+			ret = cmd.run(f'oc whoami -t | docker login -u oaicicd --password-stdin {OCRegistry}')
 			if ret.returncode != 0:
 				logging.error(f'cannot authenticate at registry')
 				OC_logout(cmd)
 				HTML.CreateHtmlTestRow('N/A', 'KO', CONST.OC_LOGIN_FAIL)
 				return False
 			tag = ctx.g.branch
-			registry = f'{oc.registry}/{CI_OC_RAN_NAMESPACE}'
+			registry = f'{OCRegistry}/{CI_OC_RAN_NAMESPACE}'
 			success, msg = cls_containerize.Containerize.Pull_Image(cmd, images, tag, tag_prefix, registry, None, None)
 			OC_logout(cmd)
 		param = f"on node {node}"
