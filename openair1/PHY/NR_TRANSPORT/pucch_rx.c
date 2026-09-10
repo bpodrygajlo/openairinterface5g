@@ -547,19 +547,21 @@ void nr_decode_pucch1(PHY_VARS_gNB *gNB,
       // to calculate new offset PRB
       pucch_pdu->prb_start = pucch_pdu->bwp_start + pucch_pdu->second_hop_prb;
     }
-    int re_offset = (l + pucch_pdu->start_symbol_index) * symb_sz + NR_NB_SC_PER_RB * pucch_pdu->prb_start;
+
+    const int symbol_offset = (l + pucch_pdu->start_symbol_index) * symb_sz;
+    int re_offset = symbol_offset + NR_NB_SC_PER_RB * pucch_pdu->prb_start;
 
     for (int n = 0; n < NR_NB_SC_PER_RB; n++) {
       const int current_subcarrier = (l / 2) * NR_NB_SC_PER_RB + n;
 
       if (l % 2 == 1) // mapping PUCCH or DM-RS according to TS38.211 subclause 6.4.1.3.1
         for (int r = 0; r < n_rx; r++) {
-          z_rx[r][current_subcarrier] = rxdataF[r][soffset + re_offset];
+          z_rx[r][current_subcarrier] = rxdataF[r][soffset + symbol_offset + re_offset];
           z[r][n] = z_rx[r][current_subcarrier];
         }
       else
         for (int r = 0; r < n_rx; r++) {
-          z_dmrs_rx[r][current_subcarrier] = rxdataF[r][soffset + re_offset];
+          z_dmrs_rx[r][current_subcarrier] = rxdataF[r][soffset + symbol_offset + re_offset];
           z[r][n] = z_dmrs_rx[r][current_subcarrier];
         }
 
@@ -574,11 +576,11 @@ void nr_decode_pucch1(PHY_VARS_gNB *gNB,
           frame_parms->N_RB_DL,
           frame_parms->first_carrier_offset,
           current_subcarrier,
-          soffset + re_offset,
+          soffset + symbol_offset + re_offset,
           l,
           n,
-          rxdataF[0][soffset + re_offset].r,
-          rxdataF[0][soffset + re_offset].i);
+          rxdataF[0][soffset + symbol_offset + re_offset].r,
+          rxdataF[0][soffset + symbol_offset + re_offset].i);
 #endif
       re_offset++;
     } // end sc loop
