@@ -781,7 +781,10 @@ static void config_common(nr_cell_sched_t *cell, const nr_mac_config_t *config, 
     cfg->analog_beamforming_ve.num_beams_period_vendor_ext.value = cell->beam_info.beams_per_period;
     cfg->num_tlv++;
     cfg->analog_beamforming_ve.analog_bf_vendor_ext.tl.tag = NFAPI_NR_FAPI_ANALOG_BF_VENDOR_EXTENSION_TAG;
-    cfg->analog_beamforming_ve.analog_bf_vendor_ext.value = 1;  // analog BF enabled
+    // Only PRECONFIGURED_BEAM_IDX forwards to actual RF/GPIO hardware (ctrl_rf()); LOPHY_BEAM_IDX
+    // means L1 resolves the beam by itself in software via the DBT (nr_ru_procedures.c) - nothing
+    // for the RF device to do.
+    cfg->analog_beamforming_ve.analog_bf_vendor_ext.value = (cell->beam_info.beam_mode == PRECONFIGURED_BEAM_IDX);
     cfg->num_tlv++;
   } else {
     cfg->analog_beamforming_ve.analog_bf_vendor_ext.value = 0;  // analog BF disabled

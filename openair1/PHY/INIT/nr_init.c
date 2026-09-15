@@ -164,7 +164,7 @@ void phy_init_nr_gNB(PHY_VARS_gNB *gNB)
 
   /* beam_id array is common for tx and rx so the max number of both is taken */
   const unsigned int num_antenna_ports = max(Ptx, Prx);
-  if (cfg->analog_beamforming_ve.analog_bf_vendor_ext.value) {
+  if (cfg->analog_beamforming_ve.analog_bf_vendor_ext.value || cfg->dbt_config.num_dig_beams > 0) {
     common_vars->beam_id = (uint16_t **)malloc16(fp->slots_per_frame * fp->symbols_per_slot * sizeof(*common_vars->beam_id));
     for (int i = 0; i < fp->slots_per_frame * fp->symbols_per_slot; i++)
       common_vars->beam_id[i] = (uint16_t *)malloc16_clear(num_antenna_ports * sizeof(**common_vars->beam_id));

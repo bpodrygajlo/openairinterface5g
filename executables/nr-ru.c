@@ -1131,6 +1131,7 @@ static void NRRCconfig_RU(configmodule_interface_t *cfg)
 
     ru->nb_tx = *param[RU_NB_TX_IDX].uptr;
     ru->nb_rx = *param[RU_NB_RX_IDX].uptr;
+    ru->do_precoding = *param[RU_DO_PRECODING].iptr;
     ru->att_tx = *param[RU_ATT_TX_IDX].uptr;
     ru->att_rx = *param[RU_ATT_RX_IDX].uptr;
     ru->if_frequency = *param[RU_IF_FREQUENCY].u64ptr;
