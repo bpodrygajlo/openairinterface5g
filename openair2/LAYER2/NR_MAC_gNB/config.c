@@ -428,6 +428,12 @@ static void config_common(nr_cell_sched_t *cell, const nr_mac_config_t *config, 
     for (uint16_t b = 0; b < cfg->dbt_config.num_dig_beams; ++b) {
       nfapi_nr_dig_beam_t *beam = &cfg->dbt_config.dig_beam_list[b];
       beam->beam_idx = config->bt.beam_ids ? config->bt.beam_ids[b] : b;
+      // OAI's beam_lut (built by the RU from this list) indexes directly by beam_idx, so cap it
+      // here at config time rather than failing later, deep in the TX pipeline.
+      AssertFatal(beam->beam_idx < NFAPI_NR_MAX_DBT_BEAM_IDX,
+                  "DBT beam_idx %u exceeds OAI's supported max %u\n",
+                  beam->beam_idx,
+                  NFAPI_NR_MAX_DBT_BEAM_IDX);
       beam->txru_list = calloc_or_fail(cfg->dbt_config.num_txrus, sizeof(*beam->txru_list));
       for (uint16_t w = 0; w < cfg->dbt_config.num_txrus; ++w) {
         float re = crealf(config->bt.beam_weights[b][w]);

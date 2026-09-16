@@ -22,16 +22,13 @@
 
 #include <time.h>
 
-// Looks up the DBT entry for a given FAPI beam index. The DBT  associates each
-// configured digital beam with an arbitrary beam_idx, not necessarily equal to
-// its position in dig_beam_list.
-static const nfapi_nr_dig_beam_t *find_dig_beam(const nfapi_nr_dbt_pdu_t *dbt, uint16_t beam_idx)
+// Looks up the DBT entry for a given FAPI beam index via ru->dbt_lut (built once in
+// build_dbt_lut() when the DBT is loaded), a direct array access instead of a scan over
+// dig_beam_list (whose entries' beam_idx is arbitrary, not tied to their list position).
+static const nfapi_nr_dig_beam_t *find_dig_beam(const RU_t *ru, uint16_t beam_idx)
 {
-  for (int b = 0; b < dbt->num_dig_beams; b++) {
-    if (dbt->dig_beam_list[b].beam_idx == beam_idx)
-      return &dbt->dig_beam_list[b];
-  }
-  return NULL;
+  AssertFatal(beam_idx < NFAPI_NR_MAX_DBT_BEAM_IDX, "beam_idx %u exceeds OAI's supported max %u\n", beam_idx, NFAPI_NR_MAX_DBT_BEAM_IDX);
+  return ru->dbt_lut[beam_idx];
 }
 
 // dig_beam_weight_Re/Im are uint16_t only because that is the wire type in the SCF nFAPI struct
@@ -170,10 +167,9 @@ static void nr_feptx_prec_bf_antenna(RU_t *ru, int slot_tx, int aa)
 
   // Digital beamforming: cfg->dbt_config is a per-antenna weight table (Category A, DU-side
   // combining - the RU/xran fronthaul just streams whatever lands in txdataF_BF)
-  const nfapi_nr_dbt_pdu_t *dbt = &ru->config.dbt_config;
   for (int s = 0; s < fp->symbols_per_slot; ++s) {
     uint16_t beam_idx = gNB->common_vars.beam_id[slot_tx * fp->symbols_per_slot + s][aa];
-    const nfapi_nr_dig_beam_t *dig_beam = find_dig_beam(dbt, beam_idx);
+    const nfapi_nr_dig_beam_t *dig_beam = find_dig_beam(ru, beam_idx);
     AssertFatal(dig_beam != NULL, "No DBT entry for beam_id %d on antenna %d\n", beam_idx, aa);
     const c16_t w = dig_beam_weight(dig_beam, aa);
     rotate_cpx_vector(&gNB->common_vars.txdataF[aa][s * fp->ofdm_symbol_size],
@@ -260,12 +256,11 @@ void nr_feptx(void *arg)
                        fp->ofdm_symbol_size);
   } else {
     // Digital beamforming, fused with the inverse FFT shift: apply the per-antenna DBT weight
-    const nfapi_nr_dbt_pdu_t *dbt = &ru->config.dbt_config;
     const int nbins = fp->N_RB_DL * NR_NB_SC_PER_RB;
     const int half = nbins / 2;
     for (uint s = startSymbol; s < startSymbol + numSymbols; s++) {
       uint16_t beam_idx = ru->gNB_list[0]->common_vars.beam_id[slot * fp->symbols_per_slot + s][aa];
-      const nfapi_nr_dig_beam_t *dig_beam = find_dig_beam(dbt, beam_idx);
+      const nfapi_nr_dig_beam_t *dig_beam = find_dig_beam(ru, beam_idx);
       AssertFatal(dig_beam != NULL, "No DBT entry for beam_id %d on antenna %d\n", beam_idx, aa);
       const c16_t w = dig_beam_weight(dig_beam, aa);
       const c16_t *in = ru->gNB_list[0]->common_vars.txdataF[aa] + s * fp->ofdm_symbol_size;
