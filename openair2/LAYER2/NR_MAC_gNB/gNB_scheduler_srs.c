@@ -16,6 +16,7 @@
 #include "common/utils/nr/nr_common.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <stdbool.h>
 #include "PHY/sse_intrin.h"
@@ -101,6 +102,87 @@ static uint8_t estimate_col2_matrix_rank_per_prg(const c16_t *ch,
   }
 
   return first_nonzero_row < 0 ? 0 : 1;
+}
+
+/* Eigenvalues of a real symmetric n x n matrix a (row-major, destroyed), cyclic Jacobi */
+static void jacobi_eigenvalues(int n, double *a, double *eig)
+{
+  for (int sweep = 0; sweep < 50; sweep++) {
+    double off = 0;
+    for (int p = 0; p < n; p++)
+      for (int q = p + 1; q < n; q++)
+        off += a[p * n + q] * a[p * n + q];
+    if (off < 1e-24)
+      break;
+    for (int p = 0; p < n; p++) {
+      for (int q = p + 1; q < n; q++) {
+        const double apq = a[p * n + q];
+        if (fabs(apq) < 1e-300)
+          continue;
+        const double theta = (a[q * n + q] - a[p * n + p]) / (2 * apq);
+        const double t = (theta >= 0 ? 1 : -1) / (fabs(theta) + sqrt(theta * theta + 1));
+        const double c = 1 / sqrt(t * t + 1), s = t * c;
+        for (int k = 0; k < n; k++) {
+          const double akp = a[k * n + p], akq = a[k * n + q];
+          a[k * n + p] = c * akp - s * akq;
+          a[k * n + q] = s * akp + c * akq;
+        }
+        for (int k = 0; k < n; k++) {
+          const double apk = a[p * n + k], aqk = a[q * n + k];
+          a[p * n + k] = c * apk - s * aqk;
+          a[q * n + k] = s * apk + c * aqk;
+        }
+      }
+    }
+  }
+  for (int i = 0; i < n; i++)
+    eig[i] = a[i * n + i];
+}
+
+/* Rank of the SRS channel for any (gNB elements x UE ports) shape: eigenvalues of the
+ * PRG-averaged Gram matrix H^H H, counting those within 10 dB of the largest. The
+ * complex col x col Hermitian matrix is embedded as a real 2col x 2col symmetric one,
+ * whose eigenvalues are those of the Hermitian matrix, each twice. */
+static uint8_t srs_generic_rank(const c16_t *ch, int num_gnb_antenna_elements, int num_ue_ports, int num_prgs)
+{
+  const int n = num_ue_ports;
+  double gr[n][n], gi[n][n];
+  memset(gr, 0, sizeof(gr));
+  memset(gi, 0, sizeof(gi));
+  for (int pI = 0; pI < num_prgs; pI++) {
+    for (int gI = 0; gI < num_gnb_antenna_elements; gI++) {
+      for (int u = 0; u < n; u++) {
+        const c16_t hu = ch[(u * num_gnb_antenna_elements + gI) * num_prgs + pI];
+        for (int v = 0; v < n; v++) {
+          const c16_t hv = ch[(v * num_gnb_antenna_elements + gI) * num_prgs + pI];
+          // conj(hu) * hv
+          gr[u][v] += (double)hu.r * hv.r + (double)hu.i * hv.i;
+          gi[u][v] += (double)hu.r * hv.i - (double)hu.i * hv.r;
+        }
+      }
+    }
+  }
+  const int m = 2 * n;
+  double a[m * m], eig[m];
+  for (int u = 0; u < n; u++) {
+    for (int v = 0; v < n; v++) {
+      a[u * m + v] = gr[u][v];
+      a[(u + n) * m + v + n] = gr[u][v];
+      a[u * m + v + n] = -gi[u][v];
+      a[(u + n) * m + v] = gi[u][v];
+    }
+  }
+  jacobi_eigenvalues(m, a, eig);
+  double max_eig = 0;
+  for (int i = 0; i < m; i++)
+    max_eig = max(max_eig, eig[i]);
+  if (max_eig <= 0)
+    return 0;
+  int count = 0;
+  for (int i = 0; i < m; i++)
+    if (eig[i] > 0.1 * max_eig)
+      count++;
+  return count / 2;
 }
 
 void matrix_rank_128bits(int row, int col, simde__m128i mat[4])
@@ -442,7 +524,10 @@ void nr_srs_ri_computation(const nfapi_nr_srs_normalized_channel_iq_matrix_t *nr
     *ul_ri = most_frequent_ri(antenna_rank, num_prgs);
 
   } else {
-    AssertFatal(1 == 0, "nr_srs_ri_computation() function is not implemented for row = %i and col = %i\n", row, col);
+    const uint8_t rank = srs_generic_rank(ch, row, col, num_prgs);
+    *ul_ri = rank > 0 ? rank - 1 : 0;
+    if (current_BWP->pusch_Config->maxRank)
+      *ul_ri = min(*ul_ri, *current_BWP->pusch_Config->maxRank - 1);
   }
 }
 

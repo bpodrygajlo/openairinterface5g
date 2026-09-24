@@ -222,6 +222,9 @@ bool generate_srs_nr(const NR_DL_FRAME_PARMS *frame_parms,
 #endif
 
     uint16_t n_SRS_cs_i = (nr_srs_info->n_SRS_cs + (n_SRS_cs_max * (SRS_antenna_port[p_index] - 1000) / N_ap)) % n_SRS_cs_max;
+    nr_srs_info->n_SRS_cs_i[p_index] = n_SRS_cs_i;
+    nr_srs_info->n_SRS_cs_max = n_SRS_cs_max;
+    nr_srs_info->M_sc_b_SRS_index = M_sc_b_SRS_index;
     double alpha_i = 2 * M_PI * ((double)n_SRS_cs_i / (double)n_SRS_cs_max);
 
 #ifdef SRS_DEBUG
@@ -253,6 +256,9 @@ bool generate_srs_nr(const NR_DL_FRAME_PARMS *frame_parms,
           LOG_E(NR_PHY, "generate_srs: unknown hopping setting %d !\n", nr_srs_info->groupOrSequenceHopping);
           return false;
       }
+
+      nr_srs_info->u[l_line] = u;
+      nr_srs_info->v[l_line] = v;
 
 #ifdef SRS_DEBUG
       LOG_I(NR_PHY,"u = %i\n", u);

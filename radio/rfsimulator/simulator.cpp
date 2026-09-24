@@ -31,6 +31,7 @@
 #include <common/config/config_userapi.h>
 #include "common_lib.h"
 #include "common/utils/threadPool/pthread_utils.h"
+#include "rfsim_cirdb.h"
 extern "C" {
 #include <common/utils/load_module_shlib.h>
 #include <openair1/SIMULATION/TOOLS/sim.h>
@@ -74,6 +75,11 @@ typedef enum { SIMU_ROLE_SERVER = 1, SIMU_ROLE_CLIENT } simuRole;
 #define RFSIMU_WAIT_TIMEOUT "wait_timeout"
 #define RFSIMU_ENABLE_BEAMS "enable_beams"
 #define RFSIMU_BEAM_GAINS "beam_gains"
+#define RFSIMU_CIRDB_YAML "cirdb_yaml"
+#define RFSIMU_CIRDB_FILE "cirdb_file"
+#define RFSIMU_CIRDB_MODEL "cirdb_model_id"
+#define RFSIMU_CIRDB_ORIENTATION "cirdb_orientation"
+#define RFSIMU_CIRDB_GPU "cirdb_gpu"
 
 #define RFSIM_CONFIG_HELP_OPTIONS                                                                  \
   " list of comma separated options to enable rf simulator functionalities. Available options: \n" \
@@ -100,6 +106,11 @@ typedef enum { SIMU_ROLE_SERVER = 1, SIMU_ROLE_CLIENT } simuRole;
   INTPARAM(RFSIMU_WAIT_TIMEOUT,         "<wait timeout if no UE connected>\n",      simOpt, NULL,                             1),                     \
   BOOLPARAM(RFSIMU_ENABLE_BEAMS,        "<enable simplified beam simulation>\n",    simBool,NULL,                             0),                     \
   STRINGPARAM(RFSIMU_BEAM_GAINS,        "<per-beam gain in dB, one value per gNB beam id>\n", simOpt, NULL,                   NULL),                  \
+  STRINGPARAM(RFSIMU_CIRDB_YAML,        "<CIR DB YAML sidecar: enables the CIR DB channel>\n", simOpt, NULL,                  NULL),                  \
+  STRINGPARAM(RFSIMU_CIRDB_FILE,        "<CIR DB binary file>\n",                   simOpt, NULL,                             NULL),                  \
+  INTPARAM(RFSIMU_CIRDB_MODEL,          "<CIR DB entry model id>\n",                simOpt, NULL,                             6),                     \
+  STRINGPARAM(RFSIMU_CIRDB_ORIENTATION, "<auto, direct or transposed CIR DB>\n",    simOpt, NULL,                             "auto"),                \
+  BOOLPARAM(RFSIMU_CIRDB_GPU,           "<apply the CIR DB channel on the GPU>\n",  simBool,NULL,                             1),                     \
 };
 // clang-format on
 static void getset_currentchannels_type(char *buf, int debug, webdatadef_t *tdata, telnet_printfunc_t prnt);
@@ -205,6 +216,7 @@ typedef struct {
   int wait_timeout;
   double prop_delay_ms;
   rfsim_beam_ctrl_t *beam_ctrl;
+  rfsim_cirdb_t *cirdb;
 } rfsimulator_state_t;
 
 /**
@@ -329,6 +341,19 @@ static buffer_t *allocCirBuf(rfsimulator_state_t *bridge, int sock)
     LOG_E(HW, "setsockopt(SO_SNDBUF) failed\n");
     return NULL;
   }
+  // The kernel silently caps SO_SNDBUF at 2 * net.core.wmem_max. Both peers write a whole
+  // slot per call, and each blocks until the other reads: with many antennas a slot no longer
+  // fits in the capped buffer and the two ends deadlock in fullwrite().
+  int actual_sendbuff = 0;
+  socklen_t optlen = sizeof(actual_sendbuff);
+  if (getsockopt(sock, SOL_SOCKET, SO_SNDBUF, &actual_sendbuff, &optlen) == 0 && actual_sendbuff < sendbuff)
+    LOG_W(HW,
+          "socket send buffer is %d bytes, not the %d requested: with many antennas rfsim may deadlock, "
+          "raise it with 'sysctl -w net.core.wmem_max=%d net.core.rmem_max=%d'\n",
+          actual_sendbuff,
+          sendbuff,
+          sendbuff,
+          sendbuff);
   struct epoll_event ev = {0};
   ev.events = EPOLLIN | EPOLLRDHUP;
   ev.data.ptr = ptr;
@@ -559,6 +584,32 @@ static void rfsimulator_readconfig(rfsimulator_state_t *rfsimulator)
   int beam_gains_param_index = config_paramidx_fromname(rfsimuParams, sizeofArray(rfsimuParams), RFSIMU_BEAM_GAINS);
   if (rfsimuParam[beam_gains_param_index].strptr) {
     beam_ctrl->beam_gains = parse_beam_gains(*rfsimuParam[beam_gains_param_index].strptr);
+  }
+
+  // string parameters without a default have no storage at all when not given
+  char **cirdb_yaml_p = gpd(rfsimuParam, sizeofArray(rfsimuParams), RFSIMU_CIRDB_YAML)->strptr;
+  const char *cirdb_yaml = cirdb_yaml_p ? *cirdb_yaml_p : NULL;
+  if (cirdb_yaml && cirdb_yaml[0]) {
+    AssertFatal(!rfsimulator->channelmod, "rfsimulator: chanmod and cirdb channels are exclusive\n");
+    char **cirdb_file_p = gpd(rfsimuParam, sizeofArray(rfsimuParams), RFSIMU_CIRDB_FILE)->strptr;
+    const char *cirdb_file = cirdb_file_p ? *cirdb_file_p : NULL;
+    AssertFatal(cirdb_file && cirdb_file[0], "rfsimulator: %s needs %s\n", RFSIMU_CIRDB_YAML, RFSIMU_CIRDB_FILE);
+    const char *orientation_s = *gpd(rfsimuParam, sizeofArray(rfsimuParams), RFSIMU_CIRDB_ORIENTATION)->strptr;
+    rfsim_cirdb_orientation_t orientation = RFSIM_CIRDB_AUTO;
+    if (strcasecmp(orientation_s, "direct") == 0)
+      orientation = RFSIM_CIRDB_DIRECT;
+    else if (strcasecmp(orientation_s, "transposed") == 0)
+      orientation = RFSIM_CIRDB_TRANSPOSED;
+    else
+      AssertFatal(strcasecmp(orientation_s, "auto") == 0, "rfsimulator: unknown cirdb_orientation %s\n", orientation_s);
+    init_channelmod(); // for --channelmod.noise_power_dBFS: the CIR DB is noiseless
+    rfsimulator->cirdb = rfsim_cirdb_init(cirdb_yaml,
+                                          cirdb_file,
+                                          *gpd(rfsimuParam, sizeofArray(rfsimuParams), RFSIMU_CIRDB_MODEL)->iptr,
+                                          orientation,
+                                          rfsimulator->rx_num_channels,
+                                          rfsimulator->sample_rate,
+                                          *gpd(rfsimuParam, sizeofArray(rfsimuParams), RFSIMU_CIRDB_GPU)->iptr);
   }
 
   if (strncasecmp(rfsimulator->ip, "enb", 3) == 0 || strncasecmp(rfsimulator->ip, "server", 3) == 0)
@@ -1206,7 +1257,11 @@ static void rfsimulator_read_internal(rfsimulator_state_t *t,
                                       int nbAnt,
                                       std::vector<uint16_t> rx_beams)
 {
-  cf_t temp_array[nbAnt][nsamps];
+  // heap, not a VLA: with many antennas this is tens of MB (32 ant x 61440 samples x 8 B = 15.7 MB)
+  static thread_local std::vector<cf_t> temp_storage;
+  temp_storage.resize((size_t)nbAnt * nsamps);
+  cf_t(*temp_array)[nsamps] = reinterpret_cast<cf_t(*)[nsamps]>(temp_storage.data());
+  const size_t temp_array_bytes = temp_storage.size() * sizeof(cf_t);
   bool channel_modelling = false;
   // Add all input nodes signal in the output buffer
   for (int sock = 0; sock < MAX_FD_RFSIMU; sock++) {
@@ -1221,9 +1276,26 @@ static void rfsimulator_read_internal(rfsimulator_state_t *t,
       if (reGenerateChannel)
         random_channel(ptr->channel_model, 0);
 
-      if (ptr->channel_model != NULL) { // apply a channel model
+      if (t->cirdb) {
         if (!channel_modelling) {
-          memset(temp_array, 0, sizeof(temp_array));
+          memset(temp_array, 0, temp_array_bytes);
+          channel_modelling = true;
+        }
+        // the peer's streams with the taps' history in front, sender beam gains applied
+        const int L = rfsim_cirdb_length(t->cirdb);
+        static thread_local std::vector<c16_t> cirdb_in;
+        cirdb_in.assign((size_t)ptr->nbAnt * (nsamps + L - 1), {0, 0});
+        c16_t *input[ptr->nbAnt];
+        for (uint aatx = 0; aatx < ptr->nbAnt; aatx++)
+          input[aatx] = cirdb_in.data() + (size_t)aatx * (nsamps + L - 1);
+        combine_received_beams(t, ptr->received_packets, timestamp - (L - 1), nsamps + L - 1, rx_beams[0], input);
+        cf_t *output[nbAnt];
+        for (int aarx = 0; aarx < nbAnt; aarx++)
+          output[aarx] = temp_array[aarx];
+        rfsim_cirdb_apply(t->cirdb, ptr->nbAnt, input, timestamp, nsamps, output);
+      } else if (ptr->channel_model != NULL) { // apply a channel model
+        if (!channel_modelling) {
+          memset(temp_array, 0, temp_array_bytes);
           channel_modelling = true;
         }
         const uint64_t channel_offset = ptr->channel_model->channel_offset;
@@ -1298,7 +1370,7 @@ static void rfsimulator_read_internal(rfsimulator_state_t *t,
   bool apply_global_noise = get_noise_power_dBFS() != INVALID_DBFS_VALUE;
   if (apply_global_noise) {
     if (!channel_modelling) {
-      memset(temp_array, 0, sizeof(temp_array));
+      memset(temp_array, 0, temp_array_bytes);
       channel_modelling = true;
     }
     int16_t noise_power = (int16_t)(32767.0 / powf(10.0, .05 * -get_noise_power_dBFS()));
@@ -1436,7 +1508,9 @@ static int rfsimulator_read(openair0_device_t *device, openair0_timestamp_t *pti
 
     if (ptr->conn_sock != -1 && !ptr->received_packets.empty()) {
       openair0_timestamp_t timestamp_to_free = t->nextRxTstamp - 1;
-      if (ptr->channel_model) {
+      if (t->cirdb) {
+        timestamp_to_free -= rfsim_cirdb_length(t->cirdb) - 1;
+      } else if (ptr->channel_model) {
         timestamp_to_free -=
             (ptr->channel_model->channel_length - 1) + std::max(ptr->channel_model->channel_offset, t->chan_offset);
       } else {
@@ -1472,6 +1546,7 @@ static void rfsimulator_end(openair0_device_t *device)
   clear_beam_queue(&s->beam_ctrl->active, BeamSide::kTx, INT64_MAX);
   clear_beam_queue(&s->beam_ctrl->active, BeamSide::kRx, INT64_MAX);
   delete s->beam_ctrl;
+  rfsim_cirdb_end(s->cirdb);
   close(s->epollfd);
   free(s->ip);
   delete s;

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-CSSL-1.0
  */
 
+#include "PHY/NR_ESTIMATION/srs_est/isac_dump.h"
 #include "executables/softmodem-common.h"
 #include "executables/nr-softmodem-common.h"
 #include "common/utils/nr/nr_common.h"
@@ -109,8 +110,8 @@ void phy_init_nr_gNB(PHY_VARS_gNB *gNB)
   int Prx = cfg->carrier_config.num_rx_ant.value;
   int max_ul_mimo_layers = NR_MAX_NB_LAYERS;
 
-  AssertFatal(Ptx > 0 && Ptx < 9,"Ptx %d is not supported\n", Ptx);
-  AssertFatal(Prx > 0 && Prx < 9,"Prx %d is not supported\n", Prx);
+  AssertFatal(Ptx > 0 && Ptx <= OPENAIR0_MAX_ANTENNAS, "Ptx %d is not supported\n", Ptx);
+  AssertFatal(Prx > 0 && Prx <= OPENAIR0_MAX_ANTENNAS, "Prx %d is not supported\n", Prx);
   LOG_D(PHY, "[gNB %d]About to wait for gNB to be configured\n", gNB->Mod_id);
 
   while(gNB->configured == 0)
@@ -146,6 +147,14 @@ void phy_init_nr_gNB(PHY_VARS_gNB *gNB)
 
   int ret_loader = load_nrLDPC_coding_interface(NULL, &gNB->nrLDPC_coding_interface, 16 * gNB->max_nb_pusch);
   AssertFatal(ret_loader == 0, "error loading LDPC library\n");
+
+  // largest SRS: whole carrier on comb 2
+  load_srs_est_interface(&gNB->srs_est, Prx, MAX_NUM_NR_SRS_AP, fp->N_RB_UL * NR_NB_SC_PER_RB / 2, 4);
+  if (gNB->srs_est_max_delay_us <= 0)
+    gNB->srs_est_max_delay_us = 2.5;
+  gNB->srs_est_pdp_threshold = 4;
+  gNB->isac_dump = isac_dump_init();
+  AssertFatal(!gNB->isac_dump || gNB->srs_est.run, "--isac.dump_file needs an SRS estimation module (--loader.srs_est.shlibversion)\n");
 
   init_DLSCH_struct(gNB);
 
@@ -211,6 +220,11 @@ void phy_free_nr_gNB(PHY_VARS_gNB *gNB)
   PHY_MEASUREMENTS_gNB *meas = &gNB->measurements;
   free_and_zero(meas->n0_subband_power);
 
+  for (int i = 0; i < NR_SRS_SCRATCH_NUM; i++) {
+    free_and_zero(gNB->srs_scratch[i]);
+    gNB->srs_scratch_len[i] = 0;
+  }
+
   free_ul_reference_signal_sequences();
   free_gnb_lowpapr_sequences();
 
@@ -259,6 +273,9 @@ void phy_free_nr_gNB(PHY_VARS_gNB *gNB)
   free(gNB->pusch_vars);
 
   free_nrLDPC_coding_interface(&gNB->nrLDPC_coding_interface);
+  isac_dump_end(gNB->isac_dump);
+  gNB->isac_dump = NULL;
+  free_srs_est_interface(&gNB->srs_est);
 }
 
 void nr_phy_config_request_sim(PHY_VARS_gNB *gNB,

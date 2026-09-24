@@ -858,7 +858,7 @@ typedef struct {
 // the number of streams could be same as number of layers or number of antenna
 // ports or number of baseband ports. Hence we set this to be the maximum number
 // of baseband ports
-#define MAX_NUM_SPATIAL_STREAMS 16
+#define MAX_NUM_SPATIAL_STREAMS 64
 
 typedef struct {
   uint16_t dci_index;

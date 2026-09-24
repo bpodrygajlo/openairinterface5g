@@ -687,7 +687,10 @@ static struct NR_SRS_Resource__resourceType__periodic *configure_periodic_srs(co
   int offset = get_ul_slot_offset(fs, uid, false); // only full UL slots for SRS
   // checked for validity in verify_radio_configuration
   AssertFatal(offset < 2560, "Cannot allocate SRS configuration for uid %d, not enough resources\n", uid);
-  const int ideal_period = set_ideal_period(cell,false);
+  // a configured period (e.g. for sensing, to follow the channel's phase) replaces the default,
+  // which leaves room for every possible UE
+  const int ideal_period = cell->radio_config.srs_period > 0 ? cell->radio_config.srs_period : set_ideal_period(cell, false);
+  AssertFatal(offset < ideal_period, "SRS offset %d of UE %d does not fit in a period of %d slots: raise srs_period\n", offset, uid, ideal_period);
 
   struct NR_SRS_Resource__resourceType__periodic *periodic_srs = calloc(1,sizeof(*periodic_srs));
   if (check_periodicity(4, ideal_period, fs)) {

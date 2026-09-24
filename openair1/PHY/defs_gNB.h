@@ -21,6 +21,7 @@
 #include "common/utils/threadPool/task_ans.h"
 #include "openair1/PHY/defs_RU.h"
 #include "common/utils/ds/spsc_q.h"
+#include "PHY/NR_ESTIMATION/srs_est/srs_est_interface.h"
 
 #define MAX_NUM_RU_PER_gNB 8
 #define MAX_PUCCH0_NID 8
@@ -53,6 +54,18 @@ typedef struct {
   int lut[MAX_PUCCH0_NID][160][14];
 } NR_gNB_PUCCH0_LUT_t;
 
+typedef enum {
+  NR_SRS_SCRATCH_FREQ,
+  NR_SRS_SCRATCH_TIME,
+  NR_SRS_SCRATCH_TIME_SHIFTED,
+  NR_SRS_SCRATCH_RX,
+  NR_SRS_SCRATCH_NOISE,
+  NR_SRS_SCRATCH_LS,
+  NR_SRS_SCRATCH_GEN,
+  NR_SRS_SCRATCH_EST, // f32 output of the SRS estimation module
+  NR_SRS_SCRATCH_NUM
+} nr_srs_scratch_id_t;
+
 typedef struct {
   int dump_frame;
   int round_trials[8];
@@ -60,8 +73,8 @@ typedef struct {
   int total_bytes_rx;
   int current_Qm;
   int current_RI;
-  int power[MAX_ANT];
-  int noise_power[MAX_ANT];
+  int power[OPENAIR0_MAX_ANTENNAS];
+  int noise_power[OPENAIR0_MAX_ANTENNAS];
   int DTX;
   int sync_pos;
 } NR_gNB_SCH_STATS_t;
@@ -244,11 +257,11 @@ typedef struct {
   /// \f$\log_2(\max|H_i|^2)\f$
   int16_t log2_maxh;
   /// measured RX power based on DRS
-  uint32_t ulsch_power[8];
+  uint32_t ulsch_power[OPENAIR0_MAX_ANTENNAS];
   /// total signal over antennas
   uint32_t ulsch_power_tot;
   /// measured RX noise power
-  uint32_t ulsch_noise_power[8];
+  uint32_t ulsch_noise_power[OPENAIR0_MAX_ANTENNAS];
   /// total noise over antennas
   uint32_t ulsch_noise_power_tot;
   /// \brief llr values.
@@ -329,7 +342,7 @@ typedef struct {
   //! estimated avg subband noise power (dB)
   int n0_subband_power_avg_dB;
   //! estimated avg subband noise power per antenna (dB)
-  int n0_subband_power_avg_perANT_dB[MAX_ANT];
+  int n0_subband_power_avg_perANT_dB[OPENAIR0_MAX_ANTENNAS];
   //! estimated avg noise power per RB (dB)
   int n0_subband_power_tot_dB[275];
   /// PRACH background noise level
@@ -368,6 +381,9 @@ typedef struct PHY_VARS_gNB_s {
   spsc_q_t pucch_queue;
   spsc_q_t pusch_queue;
   spsc_q_t srs_queue;
+  /// heap scratch for SRS processing, grown on demand (too large for the L1 stack with many rx antennas)
+  void *srs_scratch[NR_SRS_SCRATCH_NUM];
+  size_t srs_scratch_len[NR_SRS_SCRATCH_NUM];
   NR_gNB_ULSCH_t *ulsch;
   NR_gNB_PHY_STATS_t phy_stats[MAX_MOBILES_PER_GNB];
   t_nrPolar_params **polarParams;
@@ -406,6 +422,30 @@ typedef struct PHY_VARS_gNB_s {
   int pusch_thres;
   int prach_thres;
   int srs_thres;
+  /// optional high-precision SRS estimator (--loader.srs_est.shlibversion), NULL functions if not loaded
+  srs_est_interface_t srs_est;
+  srs_est_method_t srs_est_method;
+  /// largest excess delay the SRS estimator keeps (its delay window)
+  float srs_est_max_delay_us;
+  /// significance threshold handed to the module, in noise standard deviations (see srs_est_in_t)
+  float srs_est_pdp_threshold;
+  /// last estimate of the module, valid until the next SRS is processed
+  struct {
+    bool valid;
+    int nb_rx, n_ports, M, K_TC;
+    /// subcarrier of comb RE 0 of port 0, counted from the lowest subcarrier of the carrier
+    int first_sc;
+    int k0[SRS_EST_MAX_PORTS]; ///< comb offset of each port relative to first_sc
+    const cf_t *h_comb; ///< [port][antenna][M]
+    float noise_var, signal_power;
+    /// the c16 estimates handed to the rest of the L1 are h * c16_scale
+    float c16_scale;
+  } srs_est_last;
+  /// export of the float SRS estimates (--isac.dump_file), NULL if off
+  struct isac_dump_s *isac_dump;
+  /// frame counter unwrapped over the 1024 frame numbers, for the export's timestamps
+  int isac_last_frame;
+  uint32_t isac_frame_wraps;
   uint64_t bad_pucch;
   int num_ulprbbl;
   uint16_t ulprbbl [MAX_BWP_SIZE];

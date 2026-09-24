@@ -196,6 +196,8 @@ typedef struct nr_mac_config_s {
   int minRXTXTIME;
   int do_CSIRS;
   nr_srs_type_t do_SRS;
+  /// periodic SRS every this many slots at least, 0 for the default (one TDD period per possible UE)
+  int srs_period;
   int do_TCI;
   int max_num_rsrp;
   bool force_256qam_off;

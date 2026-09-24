@@ -711,8 +711,18 @@ int nr_rx_pusch_group_tp(PHY_VARS_gNB *gNB,
   else // average of channel estimates stored in first symbol
     dmrs_symbol = get_next_dmrs_symbol_in_slot(rel15_ul_ref->ul_dmrs_symb_pos, rel15_ul_ref->start_symbol_index, end_symbol);
   int size_est = ceil_mod(nb_re_pusch * frame_parms->symbols_per_slot, 16);
-  __attribute__((aligned(64))) c16_t ul_ch_estimates_ext[total_layers][num_sp_streams][size_est];
-  memset(ul_ch_estimates_ext, 0, sizeof(ul_ch_estimates_ext));
+  // heap, not a VLA: layers x rx antennas x a slot of REs is tens of MB with 32 rx antennas
+  static __thread c16_t *ul_ch_estimates_ext_buf = NULL;
+  static __thread size_t ul_ch_estimates_ext_len = 0;
+  const size_t ul_ch_estimates_ext_bytes = sizeof(c16_t) * total_layers * num_sp_streams * size_est;
+  if (ul_ch_estimates_ext_len < ul_ch_estimates_ext_bytes) {
+    free(ul_ch_estimates_ext_buf);
+    ul_ch_estimates_ext_buf = aligned_alloc(64, ul_ch_estimates_ext_bytes);
+    AssertFatal(ul_ch_estimates_ext_buf, "cannot allocate %zu bytes\n", ul_ch_estimates_ext_bytes);
+    ul_ch_estimates_ext_len = ul_ch_estimates_ext_bytes;
+  }
+  c16_t(*ul_ch_estimates_ext)[num_sp_streams][size_est] = (c16_t(*)[num_sp_streams][size_est])ul_ch_estimates_ext_buf;
+  memset(ul_ch_estimates_ext, 0, ul_ch_estimates_ext_bytes);
   int buffer_length = rel15_ul_ref->rb_size * NR_NB_SC_PER_RB;
   c16_t temp_rxFext[num_sp_streams][buffer_length] __attribute__((aligned(32)));
   for (int aarx = 0; aarx < num_sp_streams; aarx++)

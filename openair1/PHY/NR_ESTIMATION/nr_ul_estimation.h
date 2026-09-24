@@ -71,6 +71,12 @@ int nr_srs_ls_channel_estimation(int ant,
                                  c16_t srs_ls_estimated_channel[ofdm_symbol_size * N_symb_SRS],
                                  delay_t *delay);
 
+/// oversampled time domain of an SRS frequency response in the DC-centred layout, plain and FFT shifted
+void nr_srs_freq_to_time(uint16_t ofdm_symbol_size,
+                         const c16_t *freq,
+                         c16_t srs_estimated_channel_time[NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size],
+                         c16_t srs_estimated_channel_time_shifted[NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size]);
+
 int nr_srs_channel_interpolation(int p_index,
                                  uint16_t ofdm_symbol_size,
                                  uint16_t first_carrier_offset,

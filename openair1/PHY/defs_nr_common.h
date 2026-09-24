@@ -78,6 +78,13 @@ typedef enum{
 
 typedef struct nr_srs_info_s {
   uint8_t k_0_p[MAX_NUM_NR_SRS_AP][MAX_NUM_NR_SRS_SYMBOLS];
+  /// sequence group and base sequence number per SRS symbol, and cyclic shift per port, as generated
+  uint8_t u[MAX_NUM_NR_SRS_SYMBOLS];
+  uint8_t v[MAX_NUM_NR_SRS_SYMBOLS];
+  uint8_t n_SRS_cs_i[MAX_NUM_NR_SRS_AP];
+  uint8_t n_SRS_cs_max;
+  /// index of the SRS length in the low-PAPR base sequence tables
+  uint16_t M_sc_b_SRS_index;
   uint8_t srs_generated_signal_bits;
   int B_SRS;
   int C_SRS;

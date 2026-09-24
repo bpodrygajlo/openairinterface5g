@@ -24,6 +24,8 @@
 #include "common/ran_context.h"
 #include "time_meas.h"
 #include "SCHED_NR/phy_frame_config_nr.h"
+#include <complex.h>
+#include <math.h>
 
 PHY_VARS_gNB *gNB;
 PHY_VARS_NR_UE *UE;
@@ -68,6 +70,82 @@ void e1_bearer_release_cmd(const e1ap_bearer_release_cmd_t *cmd)
   abort();
 }
 
+/* NMSE of an SRS estimate at the comb REs against the true channel of the simulation.
+ * est(a, p, k) is the estimate for gNB antenna a, UE port p (UE antenna p) at comb RE k. The true
+ * channel of multipath_channel() is y[i + dd] = sum_l ch[l] x[i - l]: at subcarrier n from DC,
+ * H(n) = exp(-j 2 pi n dd / N) sum_l ch[l] exp(-j 2 pi n l / N). The estimate is the channel times
+ * the UE's transmit amplitude (and, for the fixed-point path, its scaling), so one complex gain,
+ * fitted by least squares over all links and REs, is removed first. */
+typedef struct {
+  double err, ref;
+} srs_nmse_acc_t;
+
+static double complex srs_true_channel(const channel_desc_t *ch, int aatx, int aarx, int n, int N)
+{
+  const struct complexd *h = ch->ch[aarx + aatx * ch->nb_rx];
+  double complex acc = 0;
+  for (int l = 0; l < ch->channel_length; l++)
+    acc += (h[l].r + I * h[l].i) * cexp(-I * 2 * M_PI * (double)n * l / N);
+  return acc * cexp(-I * 2 * M_PI * (double)n * ch->channel_offset / N);
+}
+
+static double srs_nmse(const channel_desc_t *ch,
+                       int n_rx,
+                       int N_ap,
+                       int M,
+                       int K_TC,
+                       const int *first_sc, // per port: carrier subcarrier of comb RE 0
+                       int N_RB,
+                       int N,
+                       double complex (*est)(const void *ctx, int a, int p, int k),
+                       const void *ctx)
+{
+  double complex num = 0;
+  double den = 0;
+  for (int p = 0; p < N_ap; p++)
+    for (int a = 0; a < n_rx; a++)
+      for (int k = 0; k < M; k++) {
+        const double complex h = srs_true_channel(ch, p, a, first_sc[p] + K_TC * k - 6 * N_RB, N);
+        num += conj(h) * est(ctx, a, p, k);
+        den += creal(h * conj(h));
+      }
+  const double complex alpha = num / den;
+  double err = 0, ref = 0;
+  for (int p = 0; p < N_ap; p++)
+    for (int a = 0; a < n_rx; a++)
+      for (int k = 0; k < M; k++) {
+        const double complex h = alpha * srs_true_channel(ch, p, a, first_sc[p] + K_TC * k - 6 * N_RB, N);
+        const double complex e = est(ctx, a, p, k) - h;
+        err += creal(e * conj(e));
+        ref += creal(h * conj(h));
+      }
+  return err / ref;
+}
+
+typedef struct {
+  const c16_t *freq; // [a][p][N * N_symb]
+  int N_ap, stride, dc_first[SRS_EST_MAX_PORTS], K_TC;
+} legacy_est_ctx_t;
+
+static double complex legacy_est(const void *ctx, int a, int p, int k)
+{
+  const legacy_est_ctx_t *c = ctx;
+  const c16_t v = c->freq[((size_t)a * c->N_ap + p) * c->stride + c->dc_first[p] + c->K_TC * k];
+  return v.r + I * v.i;
+}
+
+typedef struct {
+  const cf_t *h; // [p][a][M]
+  int nb_rx, M;
+} module_est_ctx_t;
+
+static double complex module_est(const void *ctx, int a, int p, int k)
+{
+  const module_est_ctx_t *c = ctx;
+  const cf_t v = c->h[((size_t)p * c->nb_rx + a) * c->M + k];
+  return v.r + I * v.i;
+}
+
 int main(int argc, char *argv[])
 {
   stop = false;
@@ -101,6 +179,11 @@ int main(int argc, char *argv[])
   int threequarter_fs = 0;
   uint64_t SSB_positions = 0x01;
   uint16_t Nid_cell = 0;
+  int srs_est_method = SRS_EST_LMMSE;
+  double srs_est_max_delay_us = 0;
+  double srs_est_pdp_threshold = 4;
+  double nmse_gate_db = NAN;
+  FILE *est_dump = NULL;
 
   if ((uniqCfg = load_configmodule(argc, argv, CONFIG_ENABLECMDLINEONLY)) == 0) {
     exit_fun("[NR_SRSSIM] Error, configuration module init failed\n");
@@ -112,7 +195,7 @@ int main(int argc, char *argv[])
   InitSinLUT();
 
   int c;
-  while ((c = getopt(argc, argv, "--:O:a:b:c:d:e:f:g:h:i:kl:m:n:p:s:u:y:z:A:B:C:H:PR:S:L:")) != -1) {
+  while ((c = getopt(argc, argv, "--:O:a:b:c:d:e:f:g:h:i:kl:m:n:p:s:u:x:y:z:A:B:C:D:H:N:PR:S:L:T:W:")) != -1) {
     /* ignore long options starting with '--', option '-O' and their arguments that are handled by configmodule */
     /* with this opstring getopt returns 1 for non-option arguments, refer to 'man 3 getopt' */
     if (c == 1 || c == '-' || c == 'O')
@@ -242,7 +325,7 @@ int main(int argc, char *argv[])
 
       case 'z':
         n_rx = atoi(optarg);
-        if ((n_rx == 0) || (n_rx > 8)) {
+        if ((n_rx == 0) || (n_rx > OPENAIR0_MAX_ANTENNAS)) {
           printf("Unsupported number of rx antennas %d\n", n_rx);
           exit(-1);
         }
@@ -272,6 +355,27 @@ int main(int argc, char *argv[])
         loglvl = atoi(optarg);
         break;
 
+      case 'x':
+        srs_est_method = atoi(optarg);
+        break;
+
+      case 'D':
+        srs_est_max_delay_us = atof(optarg);
+        break;
+
+      case 'N':
+        nmse_gate_db = atof(optarg);
+        break;
+
+      case 'T':
+        srs_est_pdp_threshold = atof(optarg);
+        break;
+
+      case 'W':
+        est_dump = fopen(optarg, "wb");
+        AssertFatal(est_dump, "cannot open %s\n", optarg);
+        break;
+
       default:
       case 'h':
         printf("%s -h(elp)\n", argv[0]);
@@ -298,6 +402,11 @@ int main(int argc, char *argv[])
         printf("-L <log level, 0(errors), 1(warning), 2(info) 3(debug) 4 (trace)>\n");
         printf("-P Print SRS performances\n");
         printf("-R Maximum number of available resorce blocks (N_RB_DL)\n");
+        printf("-x SRS estimation module method: 0 LMMSE, 1 DFT (with --loader.srs_est.shlibversion _cuda)\n");
+        printf("-D SRS estimation module: largest excess delay in us\n");
+        printf("-N fail unless the mean NMSE of the SRS estimate against the true channel is below this (dB) at every SNR\n");
+        printf("-W write the module's float estimates of every trial to this file\n");
+        printf("-T SRS estimation module: significance threshold in noise standard deviations (default 4)\n");
         exit(-1);
         break;
     }
@@ -330,7 +439,10 @@ int main(int argc, char *argv[])
   nr_phy_config_request_sim(gNB, N_RB_UL, N_RB_UL, mu, Nid_cell, SSB_positions);
   printf("dl freq %" PRIu64 " , ul freq %" PRIu64 " \n", fp->dl_CarrierFreq, fp->ul_CarrierFreq);
   do_tdd_config_sim(gNB, mu);
+  gNB->srs_est_method = srs_est_method;
+  gNB->srs_est_max_delay_us = srs_est_max_delay_us;
   phy_init_nr_gNB(gNB);
+  gNB->srs_est_pdp_threshold = srs_est_pdp_threshold;
 
   // Initialize UE
   UE = calloc_or_fail(1, sizeof(PHY_VARS_NR_UE));
@@ -517,6 +629,7 @@ int main(int argc, char *argv[])
 
   init_sorted_list_meas(&gNB->rx_srs_stats, n_trials);
 
+  bool nmse_failed = false;
   for (SNR = snr0; SNR <= snr1 && !stop; SNR += snr_step) {
     reset_meas(&gNB->rx_srs_stats);
     reset_meas(&gNB->generate_srs_stats);
@@ -526,6 +639,8 @@ int main(int argc, char *argv[])
 
     double sum_srs_snr = 0;
     int tao_ns_count = 0;
+    double sum_nmse_legacy = 0, sum_nmse_module = 0;
+    int n_nmse_module = 0;
     for (trial = 0; trial < n_trials && !stop; trial++) {
       // Estimate noise power from the transmitter level and SNR
       double sigma = compute_noise_variance(txlev_sum, ofdm_symbol_size, srs_pdu.bwp_size, 1, SNR, n_trials);
@@ -558,10 +673,11 @@ int main(int argc, char *argv[])
       uint16_t timing_advance_offset;
       int16_t timing_advance_offset_nsec[n_rx];
       int srs_est;
-      c16_t srs_estimated_channel_freq[n_rx][N_ap][ofdm_symbol_size * N_symb_SRS] __attribute__((aligned(32)));
+      c16_t(*srs_estimated_channel_freq)[N_ap][ofdm_symbol_size * N_symb_SRS] =
+          malloc16(sizeof(*srs_estimated_channel_freq) * n_rx);
 
       int8_t snr;
-      nr_srs_rx_procedures(gNB,
+      nr_srs_info_t srs_info = nr_srs_rx_procedures(gNB,
                            frame,
                            slot,
                            n_rx,
@@ -578,6 +694,7 @@ int main(int argc, char *argv[])
 
       sum_srs_snr += pow(10, (double)snr / 10.0);
 
+
       int16_t delay_ns = delay * 1e9 / (fp->samples_per_frame * 100);
       for (int ant_idx = 0; ant_idx < n_rx; ant_idx++) {
         if (n_trials == 1)
@@ -589,10 +706,42 @@ int main(int argc, char *argv[])
           tao_ns_count++;
       }
       stop_meas(&gNB->rx_srs_stats);
+
+      {
+        const int K_TC = 2 << srs_pdu.comb_size;
+        const int M = get_m_srs(srs_pdu.config_index, srs_pdu.bandwidth_index) * NR_NB_SC_PER_RB / K_TC;
+        int first_sc[SRS_EST_MAX_PORTS];
+        legacy_est_ctx_t lctx = {.freq = &srs_estimated_channel_freq[0][0][0], .N_ap = N_ap, .stride = ofdm_symbol_size * N_symb_SRS, .K_TC = K_TC};
+        for (int p = 0; p < N_ap; p++) {
+          first_sc[p] = srs_pdu.bwp_start * NR_NB_SC_PER_RB + srs_info.k_0_p[p][0];
+          lctx.dc_first[p] = fp->first_carrier_offset - ofdm_symbol_size / 2 + first_sc[p];
+        }
+        // the fixed-point estimate is always there: when the module ran it is the module's, in c16
+        sum_nmse_legacy += srs_nmse(UE2gNB, n_rx, N_ap, M, K_TC, first_sc, fp->N_RB_UL, ofdm_symbol_size, legacy_est, &lctx);
+        if (gNB->srs_est_last.valid) {
+          module_est_ctx_t mctx = {.h = gNB->srs_est_last.h_comb, .nb_rx = n_rx, .M = M};
+          sum_nmse_module += srs_nmse(UE2gNB, n_rx, N_ap, M, K_TC, first_sc, fp->N_RB_UL, ofdm_symbol_size, module_est, &mctx);
+          n_nmse_module++;
+          if (est_dump)
+            fwrite(gNB->srs_est_last.h_comb, sizeof(cf_t), (size_t)N_ap * n_rx * M, est_dump);
+        }
+      }
+      free(srs_estimated_channel_freq);
     } // trail loop
     float tao_ns_rate = (float)tao_ns_count / (n_trials * n_rx);
     float SRS_SNR_dB = 10 * log10(sum_srs_snr / n_trials);
     printf("Actual SNR : %f, Estimated SNR from SRS %f (dB), TA offset success rate %f %%\n", SNR, SRS_SNR_dB, tao_ns_rate * 100);
+    const double nmse_c16_db = 10 * log10(sum_nmse_legacy / n_trials);
+    const double nmse_module_db = n_nmse_module ? 10 * log10(sum_nmse_module / n_nmse_module) : NAN;
+    // a loaded module that fails leaves the fixed-point estimate in place for that trial
+    const char *c16_from = n_nmse_module == n_trials ? " (module, quantized)" : n_nmse_module ? " (module and fixed point)" : " (fixed point)";
+    printf("SNR %.1f dB: NMSE vs true channel: c16 estimate %.2f dB%s, float estimate %.2f dB (module ran %d of %d trials)\n",
+           SNR,
+           nmse_c16_db,
+           c16_from,
+           nmse_module_db,
+           n_nmse_module,
+           n_trials);
 
     if (print_perf == 1) {
       printf("\ngNB RX\n");
@@ -613,6 +762,16 @@ int main(int argc, char *argv[])
       srs_ret = SNR >= 0.7 * SRS_SNR_dB ? 0 : 1;
     }
 
+    if (!isnan(nmse_gate_db)) {
+      // precision gate: every SNR point must pass, no early exit
+      const double nmse_db = gNB->srs_est.run ? nmse_module_db : nmse_c16_db;
+      if (!(nmse_db <= nmse_gate_db)) {
+        printf("NMSE %.2f dB above the %.2f dB gate at SNR %.1f dB\n", nmse_db, nmse_gate_db, SNR);
+        nmse_failed = true;
+      }
+      ret = nmse_failed ? 1 : 0;
+      continue;
+    }
     if (tao_ns_rate > 0.9 && srs_ret == 0) {
       ret = 0;
       break;
@@ -626,6 +785,8 @@ int main(int argc, char *argv[])
 
   // free memory
 
+  if (est_dump)
+    fclose(est_dump);
   free_sorted_list_meas(&gNB->rx_srs_stats);
   for (i = 0; i < n_tx; i++) {
     free(s_re[i]);

@@ -74,8 +74,8 @@ int nr_get_srs_signal(PHY_VARS_gNB *gNB,
 
   bool no_srs_signal = true;
   for (int ant = 0; ant < num_sp_streams; ant++) {
-    memset(srs_received_signal[ant], 0, frame_parms->ofdm_symbol_size * sizeof(c16_t));
-    memset(srs_received_noise[ant], 0, frame_parms->ofdm_symbol_size * sizeof(c16_t));
+    memset(srs_received_signal[ant], 0, frame_parms->ofdm_symbol_size * N_symb_SRS * sizeof(c16_t));
+    memset(srs_received_noise[ant], 0, frame_parms->ofdm_symbol_size * N_symb_SRS * sizeof(c16_t));
     c16_t *rx_signal = &rxdataF[ant][symbol_offset];
 
     for (int p_index = 0; p_index < N_ap; p_index++) {

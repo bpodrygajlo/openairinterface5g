@@ -317,6 +317,16 @@ add_physim_test(physim.5g.nr_srssim.test13 "SRS: 30KHz SCS, 106 PRBs, ToA 24, Co
 add_physim_test(physim.5g.nr_srssim.test14 "SRS: 30KHz SCS, 106 PRBs, ToA 24, Combsize 4, SRS symbols 4, SRS start symbol 8" nr_srssim -n300 -R106 -s5 -S10 -y2 -z2 -d 24 -b 4 -e1 -a 8)
 add_physim_test(physim.5g.nr_srssim.test15 "SRS: 30KHz SCS, 217 PRBs, ToA 8, Combsize 2, SRS symbols 4, SRS start symbol 8" nr_srssim -n300 -R217 -s0 -S5 -y2 -z2 -d 8 -b 4 -a 8)
 add_physim_test(physim.5g.nr_srssim.test16 "SRS: 30KHz SCS, 106 PRBs, SNR 2 dB to 30 dB in steps of 5 dB, ToA 24, Combsize 2" nr_srssim -n300 -R106 -s2 -S30 -y2 -z2 -d 24)
+# SRS estimation module (libsrs_est_cuda.so): the same checks as the fixed-point estimator, and
+# precision targets against the true channel (-N, NMSE in dB); the fixed-point estimator is at
+# -25, -27.5 and -16 dB on module3..5
+if (ENABLE_SRS_CUDA)
+  add_physim_test(physim.5g.nr_srssim.module1 "SRS module: 30KHz SCS, 106 PRBs, ToA 24, Combsize 2" nr_srssim -n100 -R106 -s0 -S5 -y2 -z2 -d 24 --loader.srs_est.shlibversion _cuda)
+  add_physim_test(physim.5g.nr_srssim.module2 "SRS module: 30KHz SCS, 106 PRBs, ToA 24, Combsize 4, SRS symbols 4, SRS start symbol 8" nr_srssim -n100 -R106 -s5 -S10 -y2 -z2 -d 24 -b 4 -e1 -a 8 --loader.srs_est.shlibversion _cuda)
+  add_physim_test(physim.5g.nr_srssim.module3 "SRS module precision: 51 PRBs, 8 rx, 4 ports, TDL-A, 20 dB, NMSE below -30 dB" nr_srssim -n4 -R51 -z8 -y4 -g A,l,0 -s20 -S20 -N -30 --loader.srs_est.shlibversion _cuda)
+  add_physim_test(physim.5g.nr_srssim.module4 "SRS module precision: 51 PRBs, 8 rx, 1 port, AWGN, 20 dB, NMSE below -37 dB" nr_srssim -n4 -R51 -z8 -y1 -s20 -S20 -N -37 --loader.srs_est.shlibversion _cuda)
+  add_physim_test(physim.5g.nr_srssim.module5 "SRS module precision: 51 PRBs, 8 rx, 2 ports, comb 4, TDL-C 4 us window, 20 dB, NMSE below -27.5 dB" nr_srssim -n4 -R51 -z8 -y2 -e1 -g C,l,0 -D4 -s20 -S20 -N -27.5 --loader.srs_est.shlibversion _cuda)
+endif()
 
 ####################################################################################
 ######                           offload-specific tests                       ######

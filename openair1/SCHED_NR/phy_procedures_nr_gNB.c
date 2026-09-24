@@ -18,6 +18,8 @@
 #include "PHY/nr_phy_common/inc/nr_phy_common.h"
 #include "PHY/nr_phy_common/inc/nr_phy_common_csi_rs.h"
 #include "PHY/nr_phy_common/inc/nr_phy_common_srs.h"
+#include "PHY/NR_REFSIG/ul_ref_seq_nr.h"
+#include "PHY/NR_ESTIMATION/srs_est/isac_dump.h"
 #include "PHY/NR_REFSIG/ss_pbch_nr.h"
 #include "T.h"
 #include "T_messages_creator.h"
@@ -754,6 +756,151 @@ static void copy_srs_info(const nfapi_nr_srs_pdu_t *srs_config_pdu, nr_srs_info_
   nr_srs_info->resource_type = srs_config_pdu->resource_type;
 }
 
+/* Returns a 64-byte aligned buffer of at least bytes, owned by gNB and reused across calls */
+static void *srs_scratch(PHY_VARS_gNB *gNB, nr_srs_scratch_id_t id, size_t bytes)
+{
+  if (gNB->srs_scratch_len[id] < bytes) {
+    free(gNB->srs_scratch[id]);
+    gNB->srs_scratch[id] = aligned_alloc(64, (bytes + 63) & ~(size_t)63);
+    AssertFatal(gNB->srs_scratch[id], "cannot allocate %zu bytes of SRS scratch\n", bytes);
+    gNB->srs_scratch_len[id] = bytes;
+  }
+  return gNB->srs_scratch[id];
+}
+
+/* SRS estimation by the loaded module (see srs_est_interface.h): fills the same outputs as the
+ * fixed-point LS + interpolation + noise estimation, from the module's float estimate, which is
+ * kept in gNB->srs_est_last for export. Returns false if the SRS configuration is not handled
+ * (frequency hopping) so that the caller falls back to the fixed-point path. */
+static bool srs_module_estimation(PHY_VARS_gNB *gNB,
+                                  const nfapi_nr_srs_pdu_t *srs_pdu,
+                                  const nr_srs_info_t *nr_srs_info,
+                                  int nb_antennas_rx,
+                                  int N_ap,
+                                  int N_symb_SRS,
+                                  int ofdm_symbol_size,
+                                  c16_t srs_received_signal[][ofdm_symbol_size * N_symb_SRS],
+                                  c16_t srs_estimated_channel_freq[][N_ap][ofdm_symbol_size * N_symb_SRS],
+                                  c16_t srs_estimated_channel_time[][N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size],
+                                  c16_t srs_estimated_channel_time_shifted[][N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size],
+                                  int8_t *snr,
+                                  int16_t *snr_per_rb)
+{
+  const NR_DL_FRAME_PARMS *fp = &gNB->frame_parms;
+  const int K_TC = 2 << srs_pdu->comb_size;
+  const int m_SRS_b = get_m_srs(srs_pdu->config_index, srs_pdu->bandwidth_index);
+  const int M = m_SRS_b * NR_NB_SC_PER_RB / K_TC;
+  const int N = ofdm_symbol_size;
+  gNB->srs_est_last.valid = false;
+  for (int p = 0; p < N_ap; p++)
+    for (int l = 1; l < N_symb_SRS; l++)
+      if (nr_srs_info->k_0_p[p][l] != nr_srs_info->k_0_p[p][0])
+        return false; // frequency hopping: the symbols sound different REs
+
+  // comb REs per port and base sequences per symbol
+  c16_t *y = srs_scratch(gNB, NR_SRS_SCRATCH_LS, sizeof(c16_t) * N_ap * nb_antennas_rx * N_symb_SRS * M);
+  cf_t rbar[N_symb_SRS][M];
+  for (int l = 0; l < N_symb_SRS; l++) {
+    const c16_t *table = rv_ul_ref_sig[nr_srs_info->u[l]][nr_srs_info->v[l]][nr_srs_info->M_sc_b_SRS_index];
+    for (int k = 0; k < M; k++)
+      rbar[l][k] = (cf_t){table[k].r / 32767.0f, table[k].i / 32767.0f};
+  }
+  srs_est_in_t in = {.nb_rx = nb_antennas_rx,
+                     .n_ports = N_ap,
+                     .n_symb = N_symb_SRS,
+                     .M = M,
+                     .K_TC = K_TC,
+                     .n_cs_max = nr_srs_info->n_SRS_cs_max,
+                     .y = y,
+                     .rbar = &rbar[0][0],
+                     .method = gNB->srs_est_method,
+                     .oversampling = 4,
+                     .scs_hz = 15e3 * (1 << fp->numerology_index),
+                     .pdp_threshold = gNB->srs_est_pdp_threshold};
+  int ports_per_comb = 0;
+  for (int p = 0; p < N_ap; p++) {
+    in.n_cs[p] = nr_srs_info->n_SRS_cs_i[p];
+    in.comb[p] = nr_srs_info->k_0_p[p][0] % K_TC;
+    ports_per_comb += in.comb[p] == in.comb[0];
+    for (int a = 0; a < nb_antennas_rx; a++)
+      for (int l = 0; l < N_symb_SRS; l++) {
+        const c16_t *rx = &srs_received_signal[a][l * N + srs_pdu->bwp_start * NR_NB_SC_PER_RB + nr_srs_info->k_0_p[p][l]];
+        c16_t *dst = y + (((size_t)p * nb_antennas_rx + a) * N_symb_SRS + l) * M;
+        for (int k = 0; k < M; k++)
+          dst[k] = rx[K_TC * k];
+      }
+  }
+  // delay window: a few bins of precursor for timing errors, up to the configured excess delay
+  // but never into the next port's window, leaving a guard on both sides for the noise estimate
+  const double scs = 15e3 * (1 << fp->numerology_index);
+  const double bin_s = 1.0 / (K_TC * scs * M);
+  in.win_pre = 8;
+  in.win_post = min((int)ceil(gNB->srs_est_max_delay_us * 1e-6 / bin_s), M / ports_per_comb - in.win_pre - 8);
+  if (in.win_post < 1)
+    return false;
+
+  cf_t *h = srs_scratch(gNB, NR_SRS_SCRATCH_EST, sizeof(cf_t) * N_ap * nb_antennas_rx * M * (1 + K_TC));
+  srs_est_out_t out = {.h_comb = h, .h_full = h + (size_t)N_ap * nb_antennas_rx * M};
+  if (gNB->srs_est.run(&in, &out) != 0) {
+    LOG_E(NR_PHY, "SRS estimation module failed, falling back to the fixed-point estimator\n");
+    return false;
+  }
+
+  // c16 estimates in the fixed-point layout: DC-centred, all symbols equal, scaled like the
+  // fixed-point estimate (its LS sums the N_ap cyclic-shift REs against an AMP / sqrt(N_ap)
+  // reference, a gain of sqrt(N_ap) on the channel)
+  const float c16_scale = sqrtf(N_ap);
+  const int half_bw = N - fp->first_carrier_offset;
+  c16_t freq_avg[N] __attribute__((aligned(32)));
+  for (int a = 0; a < nb_antennas_rx; a++) {
+    for (int p = 0; p < N_ap; p++) {
+      const int neg_start = N / 2 - half_bw + srs_pdu->bwp_start * NR_NB_SC_PER_RB + nr_srs_info->k_0_p[p][0];
+      const cf_t *hf = out.h_full + ((size_t)p * nb_antennas_rx + a) * K_TC * M;
+      memset(freq_avg, 0, sizeof(freq_avg));
+      for (int j = 0; j < K_TC * M && neg_start + j < N; j++) {
+        const float re = hf[j].r * c16_scale, im = hf[j].i * c16_scale;
+        freq_avg[neg_start + j] = (c16_t){(int16_t)lroundf(fmaxf(fminf(re, 32767), -32768)), (int16_t)lroundf(fmaxf(fminf(im, 32767), -32768))};
+      }
+      for (int l = 0; l < N_symb_SRS; l++)
+        memcpy(&srs_estimated_channel_freq[a][p][l * N], freq_avg, sizeof(freq_avg));
+      nr_srs_freq_to_time(N, freq_avg, srs_estimated_channel_time[a][p], srs_estimated_channel_time_shifted[a][p]);
+    }
+  }
+
+  // SNR per RE of the whole SRS (all ports add up at each RE) in one symbol, like the fixed-point
+  // estimator: mean channel power per port times the number of ports, over the noise of one
+  // symbol (the model's noise variance is that of the symbol average)
+  const float noise = fmaxf(out.noise_var * N_symb_SRS, 1e-12f);
+  *snr = (int8_t)max(min(lroundf(10 * log10f(fmaxf(N_ap * out.signal_power, 1e-12f) / noise)), 127), -128);
+  for (int rb = 0; rb < m_SRS_b; rb++) {
+    double acc = 0;
+    int cnt = 0;
+    for (int p = 0; p < N_ap; p++)
+      for (int a = 0; a < nb_antennas_rx; a++) {
+        const cf_t *hf = out.h_full + ((size_t)p * nb_antennas_rx + a) * K_TC * M;
+        for (int j = rb * NR_NB_SC_PER_RB; j < (rb + 1) * NR_NB_SC_PER_RB && j < K_TC * M; j++) {
+          acc += (double)hf[j].r * hf[j].r + (double)hf[j].i * hf[j].i;
+          cnt++;
+        }
+      }
+    snr_per_rb[rb] = (int16_t)lround(10 * log10(fmax(N_ap * acc / max(cnt, 1), 1e-12) / noise));
+  }
+
+  gNB->srs_est_last = (typeof(gNB->srs_est_last)){.valid = true,
+                                                   .nb_rx = nb_antennas_rx,
+                                                   .n_ports = N_ap,
+                                                   .M = M,
+                                                   .K_TC = K_TC,
+                                                   .first_sc = srs_pdu->bwp_start * NR_NB_SC_PER_RB + nr_srs_info->k_0_p[0][0],
+                                                   .h_comb = out.h_comb,
+                                                   .noise_var = out.noise_var,
+                                                   .signal_power = out.signal_power,
+                                                   .c16_scale = c16_scale};
+  for (int p = 0; p < N_ap; p++)
+    gNB->srs_est_last.k0[p] = nr_srs_info->k_0_p[p][0] - nr_srs_info->k_0_p[0][0];
+  return true;
+}
+
 nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
                           int frame_rx,
                           int slot_rx,
@@ -772,19 +919,22 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
   NR_DL_FRAME_PARMS *frame_parms = &gNB->frame_parms;
   const nfapi_nr_srs_pdu_t *srs_pdu = &srs->srs_pdu;
 
-  c16_t srs_estimated_channel_time[nb_antennas_rx][N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size]
-        __attribute__((aligned(32)));
-  c16_t srs_received_signal[nb_antennas_rx][ofdm_symbol_size * N_symb_SRS];
-  c16_t srs_received_noise[nb_antennas_rx][ofdm_symbol_size * N_symb_SRS];
-  c16_t srs_estimated_channel_time_shifted[nb_antennas_rx][N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size];
+  c16_t(*srs_estimated_channel_time)[N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size] =
+      srs_scratch(gNB, NR_SRS_SCRATCH_TIME, sizeof(*srs_estimated_channel_time) * nb_antennas_rx);
+  c16_t(*srs_received_signal)[ofdm_symbol_size * N_symb_SRS] =
+      srs_scratch(gNB, NR_SRS_SCRATCH_RX, sizeof(*srs_received_signal) * nb_antennas_rx);
+  c16_t(*srs_received_noise)[ofdm_symbol_size * N_symb_SRS] =
+      srs_scratch(gNB, NR_SRS_SCRATCH_NOISE, sizeof(*srs_received_noise) * nb_antennas_rx);
+  c16_t(*srs_estimated_channel_time_shifted)[N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size] =
+      srs_scratch(gNB, NR_SRS_SCRATCH_TIME_SHIFTED, sizeof(*srs_estimated_channel_time_shifted) * nb_antennas_rx);
 
   start_meas(&gNB->generate_srs_stats);
 
   nr_srs_info_t nr_srs_info = {0};
   copy_srs_info(srs_pdu, &nr_srs_info);
 
-  // TODO permanently allocate?
-  c16_t srs_generated_signal_tmp[N_ap][ofdm_symbol_size * MAX_NUM_NR_SRS_SYMBOLS];
+  c16_t(*srs_generated_signal_tmp)[ofdm_symbol_size * MAX_NUM_NR_SRS_SYMBOLS] =
+      srs_scratch(gNB, NR_SRS_SCRATCH_GEN, sizeof(*srs_generated_signal_tmp) * N_ap);
   c16_t *srs_generated_signal[N_ap];
   for (int i = 0; i < N_ap; ++i)
     srs_generated_signal[i] = srs_generated_signal_tmp[i];
@@ -812,10 +962,38 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
   stop_meas(&gNB->get_srs_signal_stats);
 
   uint32_t signal_power_avg = 0;
-  c16_t srs_ls_estimated_channel[nb_antennas_rx][N_ap][ofdm_symbol_size * N_symb_SRS];
 
   if (*srs_est >= 0) {
     start_meas(&gNB->srs_channel_estimation_stats);
+  }
+  if (*srs_est >= 0 && gNB->srs_est.run
+      && srs_module_estimation(gNB,
+                               srs_pdu,
+                               &nr_srs_info,
+                               nb_antennas_rx,
+                               N_ap,
+                               N_symb_SRS,
+                               ofdm_symbol_size,
+                               srs_received_signal,
+                               srs_estimated_channel_freq,
+                               srs_estimated_channel_time,
+                               srs_estimated_channel_time_shifted,
+                               snr,
+                               snr_per_rb)) {
+    stop_meas(&gNB->srs_channel_estimation_stats);
+    for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++)
+      for (int p_ind = 0; p_ind < N_ap; p_ind++)
+        T(T_GNB_PHY_UL_FREQ_CHANNEL_ESTIMATE,
+          T_INT(gNB->Mod_id),
+          T_INT(srs_pdu->rnti),
+          T_INT(frame_rx),
+          T_INT(0),
+          T_INT(ant_rx_ind),
+          T_INT(p_ind),
+          T_BUFFER(srs_estimated_channel_freq[ant_rx_ind][p_ind], N_symb_SRS * ofdm_symbol_size * sizeof(c16_t)));
+  } else if (*srs_est >= 0) {
+    c16_t(*srs_ls_estimated_channel)[N_ap][ofdm_symbol_size * N_symb_SRS] =
+        srs_scratch(gNB, NR_SRS_SCRATCH_LS, sizeof(*srs_ls_estimated_channel) * nb_antennas_rx);
 
     delay_t delay = {0};
     for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++) {
@@ -913,7 +1091,9 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
       snr_per_rb[rb] = dB_fixed(signal_power_avg) - dB_fixed(max(noise_power_per_rb[rb] / nb_antennas_rx, 1));
     }
     stop_meas(&gNB->srs_channel_estimation_stats);
+  }
 
+  if (*srs_est >= 0) {
     start_meas(&gNB->srs_timing_advance_stats);
     for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++) {
       nr_est_srs_timing_advance_offset(ofdm_symbol_size,
@@ -944,6 +1124,45 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
   return nr_srs_info;
 }
 
+/* one record of the float estimate for sensing: the geometry of the SRS and the radio time of its slot */
+static void isac_export_srs(PHY_VARS_gNB *gNB, fsn_t now, const nfapi_nr_srs_pdu_t *srs_pdu, const nr_srs_info_t *srs_info)
+{
+  const NR_DL_FRAME_PARMS *fp = &gNB->frame_parms;
+  if ((int)now.f < gNB->isac_last_frame)
+    gNB->isac_frame_wraps++;
+  gNB->isac_last_frame = now.f;
+  const uint64_t frame = (uint64_t)gNB->isac_frame_wraps * 1024 + now.f;
+  const uint64_t ts_offset = gNB->num_RU > 0 && gNB->RU_list[0] ? gNB->RU_list[0]->ts_offset : 0;
+  const typeof(gNB->srs_est_last) *e = &gNB->srs_est_last;
+  isac_record_header_t hdr = {.frame = frame,
+                              .slot = now.s,
+                              .rnti = srs_pdu->rnti,
+                              .nb_rx = e->nb_rx,
+                              .n_ports = e->n_ports,
+                              .M = e->M,
+                              .K_TC = e->K_TC,
+                              .n_symb = 1 << srs_pdu->num_symbols,
+                              .first_symbol = srs_pdu->time_start_position,
+                              .N_RB = fp->N_RB_UL,
+                              .N_fft = fp->ofdm_symbol_size,
+                              .estimator = gNB->srs_est_method,
+                              .first_sc = e->first_sc,
+                              .n_cs_max = srs_info->n_SRS_cs_max,
+                              .slot_timestamp = ts_offset + frame * fp->samples_per_frame + get_samples_slot_timestamp(fp, now.s),
+                              .noise_var = e->noise_var,
+                              .signal_power = e->signal_power,
+                              .c16_scale = e->c16_scale,
+                              .scs_hz = 15e3 * (1 << fp->numerology_index),
+                              .fs_hz = (double)fp->samples_per_subframe * 1000,
+                              .fc_hz = fp->ul_CarrierFreq,
+                              .payload_bytes = sizeof(cf_t) * e->n_ports * e->nb_rx * e->M};
+  for (int p = 0; p < e->n_ports; p++) {
+    hdr.k0[p] = e->k0[p];
+    hdr.n_cs[p] = srs_info->n_SRS_cs_i[p];
+  }
+  isac_dump_record(gNB->isac_dump, &hdr, e->h_comb);
+}
+
 static void handle_srs(fsn_t now,
                        PHY_VARS_gNB *gNB,
                        const NR_gNB_SRS_job_t *srs,
@@ -962,7 +1181,8 @@ static void handle_srs(fsn_t now,
   int16_t timing_advance_offset_nsec[nb_antennas_rx];
   int srs_est;
 
-  c16_t srs_estimated_channel_freq[nb_antennas_rx][N_ap][ofdm_symbol_size * N_symb_SRS] __attribute__((aligned(32)));
+  c16_t(*srs_estimated_channel_freq)[N_ap][ofdm_symbol_size * N_symb_SRS] =
+      srs_scratch(gNB, NR_SRS_SCRATCH_FREQ, sizeof(*srs_estimated_channel_freq) * nb_antennas_rx);
 
   int8_t snr;
   nr_srs_info_t srs_info = nr_srs_rx_procedures(gNB,
@@ -979,6 +1199,9 @@ static void handle_srs(fsn_t now,
                                                 snr_per_rb,
                                                 &timing_advance_offset,
                                                 timing_advance_offset_nsec);
+
+  if (gNB->isac_dump && srs_est >= 0 && gNB->srs_est_last.valid)
+    isac_export_srs(gNB, now, srs_pdu, &srs_info);
 
   if ((snr * 10) < gNB->srs_thres) {
     srs_est = -1;

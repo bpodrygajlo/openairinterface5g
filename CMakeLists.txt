@@ -954,6 +954,8 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/dmrs_nr.c
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/ptrs_nr.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_ul_channel_estimation.c
+  ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/srs_est/srs_est_load.c
+  ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/srs_est/isac_dump.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_freq_equalization.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_measurements_gNB.c
   ${PHY_NRLDPC_CODINGIF}
@@ -1838,6 +1840,9 @@ target_link_libraries(nr-softmodem PRIVATE
   -Wl,--end-group dl)
 
 target_link_libraries(nr-softmodem PRIVATE pthread m CONFIG_LIB rt)
+if (ENABLE_SRS_CUDA)
+  add_dependencies(nr-softmodem srs_est_cuda)
+endif()
 target_link_libraries(nr-softmodem PRIVATE ${T_LIB})
 target_link_libraries(nr-softmodem PRIVATE asn1_nr_rrc_hdrs asn1_lte_rrc_hdrs)
 target_link_libraries(nr-softmodem PRIVATE asn1_nr_rrc_hdrs asn1_lte_rrc_hdrs)
@@ -2068,6 +2073,10 @@ target_link_libraries(nr_srssim PRIVATE
   -Wl,--start-group UTIL SIMU PHY_NR_COMMON PHY_NR PHY_NR_UE SCHED_NR_LIB SCHED_NR_UE_LIB MAC_UE_NR MAC_NR_COMMON -Wl,--end-group
   m pthread ITTI dl nr_ue_phy_meas physim_common softmodem_common
   )
+# the SRS estimation module is loaded at run time (--loader.srs_est.shlibversion _cuda)
+if (ENABLE_SRS_CUDA)
+  add_dependencies(nr_srssim srs_est_cuda)
+endif()
 
 add_executable(nr_ulsim_mu_mimo
   ${OPENAIR1_DIR}/SIMULATION/NR_PHY/ulsim_mu_mimo.c

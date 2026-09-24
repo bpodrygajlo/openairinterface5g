@@ -535,7 +535,7 @@ int main(int argc, char *argv[])
 
     case 'z':
       n_rx = atoi(optarg);
-      if ((n_rx == 0) || (n_rx > 8)) {
+      if ((n_rx == 0) || (n_rx > OPENAIR0_MAX_ANTENNAS)) {
         printf("Unsupported number of rx antennas %d\n", n_rx);
         exit(-1);
       }

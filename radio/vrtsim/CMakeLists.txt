@@ -4,12 +4,9 @@
 add_library(vrtsim MODULE
   vrtsim.c
   cirdb_provider.c
-  cirdb_yaml.cpp
 )
 
 set_target_properties(vrtsim PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-
-find_package(yaml-cpp REQUIRED)
 
 # Link libraries - always link yaml-cpp
 target_link_libraries(vrtsim
@@ -18,7 +15,7 @@ target_link_libraries(vrtsim
     shm_td_iq_channel
     noise_device
     log_headers
-    yaml-cpp
+    cirdb
     channel_pipeline
     thread-pool
 )
@@ -65,14 +62,14 @@ endif()
 
 
 if (ENABLE_TESTS)
-  add_library(vrtsim_static vrtsim.c cirdb_provider.c cirdb_yaml.cpp)
+  add_library(vrtsim_static vrtsim.c cirdb_provider.c)
   target_link_libraries(vrtsim_static
     PUBLIC
       SIMU
       shm_td_iq_channel
       noise_device
       log_headers
-      yaml-cpp
+      cirdb
       channel_pipeline
       thread-pool
   )
