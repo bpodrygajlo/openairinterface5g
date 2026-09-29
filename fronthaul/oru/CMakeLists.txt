@@ -13,7 +13,7 @@ target_include_directories(oru_io PUBLIC ./)
 target_link_libraries(oru_io PUBLIC fh_core ${dpdk_LIBRARIES} PRIVATE oru_pcap)
 target_include_directories(oru_io PRIVATE ${dpdk_INCLUDE_DIRS})
 
-add_library(fh_compression fh_compression.c)
+add_library(fh_compression fh_compression.cpp)
 target_include_directories(fh_compression PUBLIC ./)
 target_link_libraries(fh_compression PRIVATE UTIL)
 
