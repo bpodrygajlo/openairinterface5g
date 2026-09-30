@@ -56,6 +56,13 @@ int du_pp_get_ready_ul_job_count(void *context);
 
 void du_pp_read_ul_iq(void *context, uint32_t **rxdataF, int nb_rx, uint64_t *hyper_frame, int *frame, int *slot, int *symbol);
 
+// Non-blocking: reads the next ready UL symbol job only if its absolute symbol is <= last_absolute_symbol.
+// Returns false if no job is ready or the next one is past the bound (it is kept for the next call).
+bool du_pp_read_ul_iq_upto(void *context, uint32_t **rxdataF, int nb_rx, uint64_t last_absolute_symbol, uint64_t *absolute_symbol);
+
+// Symbols after OTA at which a UL symbol's receive window closes and its job becomes ready (Ta3 max).
+uint32_t du_pp_get_ul_window_symbols(void *context);
+
 void du_pp_expect_prach_occasion(void *context, uint64_t start_absolute_symbol, int num_symbols, int slot_in_frame, int ant_id, int section_id, int start_prb, int num_prb, fh_comp_method_t comp_method, uint8_t iq_width, int kbar);
 
 void du_pp_handle_prach_uplane_packet(void *context, void *pkt);

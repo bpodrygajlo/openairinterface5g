@@ -472,6 +472,69 @@ void test_cplane_dl_wire_fields() {
   cleanup_du_tx_scheduler(ctx);
 }
 
+// Regression test for a use-after-scope bug: du_fhi_south_out() (the real caller, in
+// radio/fhi_72_native/du_fhi_isolate.c) passes a stack-local buffer that is only valid for the
+// duration of the du_tx_schedule_dl_iq() call -- actual transmission happens later, once
+// send_at_symbol's T1a_up-windowed time arrives. The scheduler must copy the IQ samples at
+// enqueue time; if it only stores the caller's pointer, the dispatched packet reads back
+// whatever now occupies that (by then reused/overwritten) memory instead of the real samples.
+void test_source_buffer_reused_after_schedule() {
+  printf("test_source_buffer_reused_after_schedule...\n");
+  struct xran_eaxcid_config eaxc = { .mask_cuPortId = 0xF000, .mask_bandSectorId = 0x0F00, .mask_ccId = 0x00F0, .mask_ruPortId = 0x000F, .bit_cuPortId = 12, .bit_bandSectorId = 8, .bit_ccId = 4, .bit_ruPortId = 0 };
+  void *ctx = init_du_tx_scheduler(0, 106, 200, 300, 100, 400, 100, 500, 1500, FH_COMP_NONE, 16, eaxc, mock_alloc_func, mock_send_func, NULL);
+
+  uint32_t **txdataF = allocate_txdata(1, 106);
+  int16_t *txdata_i16 = (int16_t *)txdataF[0];
+  int16_t expected[106 * 12 * 2];
+  for (int i = 0; i < 106 * 12 * 2; i++) {
+    txdata_i16[i] = (int16_t)(i * 7 + 3); // arbitrary non-zero marker pattern
+    expected[i] = txdata_i16[i];
+  }
+  // 20 PRBs (as in test_wire_format) fits in one packet under the default 1500-byte MTU --
+  // keeps this test focused on the use-after-scope bug, not MTU fragmentation.
+  du_tx_dl_section_t sections[1] = {{.beam_id = 0, .start_prb = 5, .num_prb = 20, .section_id = 1}};
+
+  // Mirrors test_basic_scheduling's timing: T1a_up_max_sym_diff = 300uS / 71uS = 4, so
+  // scheduling symbol 10 (ota_absolute_symbol=10) gives send_at_symbol = 10 - (4-1) = 7. The
+  // clock must be ticked to *before* 7 first, or the schedule call itself would immediately
+  // reject the job as already-too-late (defeating the point of this test).
+  du_tx_handle_absolute_symbol_tick(ctx, 5); // Current symbol = 5
+  du_tx_schedule_dl_iq(ctx, txdataF, 1, 0, 0, 0, 10, sections, 1);
+  // send_at_symbol = 7; dispatch is deferred, not immediate.
+
+  // Simulate the real caller: the source buffer is torn down (or, as in production, simply goes
+  // out of scope and gets reused by later stack frames) right after scheduling, well before the
+  // deferred dispatch below actually reads it.
+  memset(txdataF[0], 0xAA, 106 * 12 * sizeof(uint32_t));
+  free_txdata(txdataF, 1);
+
+  du_tx_handle_absolute_symbol_tick(ctx, 7); // reaches send_at_symbol, triggers dispatch
+  assert(test_num_mbufs_captured == 1);
+
+  struct rte_mbuf *mbuf = test_mbufs_captured[0];
+  struct xran_ecpri_hdr *ecpri;
+  struct xran_recv_packet_info info;
+  assert(xran_parse_ecpri_hdr(mbuf, &ecpri, &info) == 0);
+
+  void *iq_data_start = NULL;
+  uint8_t cc_id = 0, ant_id = 0, frame_id = 0, subframe_id = 0, slot_id = 0, symb_id = 0, filter_id = 0;
+  union ecpri_seq_id seq;
+  uint16_t num_prbu, start_prbu, sym_inc, rb, sect_id;
+  uint8_t compMeth = 0, iqWidth = 0;
+  int ret = xran_extract_iq_samples(mbuf, &eaxc, &iq_data_start, &cc_id, &ant_id, &frame_id, &subframe_id, &slot_id, &symb_id, &filter_id, &seq, &num_prbu, &start_prbu, &sym_inc, &rb, &sect_id, 0, 0, &compMeth, &iqWidth);
+  assert(ret != 0);
+
+  const uint16_t *wire = (const uint16_t *)iq_data_start;
+  int expected_start_i16 = 5 * 12 * 2;
+  for (int i = 0; i < 20 * 12 * 2; i++) {
+    int16_t got = (int16_t)rte_be_to_cpu_16(wire[i]);
+    assert(got == expected[expected_start_i16 + i]);
+  }
+
+  clear_captured_mbufs();
+  cleanup_du_tx_scheduler(ctx);
+}
+
 int main(int argc, char **argv) {
   int ret = rte_eal_init(argc, argv);
   if (ret < 0) rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
@@ -479,6 +542,7 @@ int main(int argc, char **argv) {
   mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS, MBUF_CACHE_SIZE, 0, MBUF_SIZE, rte_socket_id());
   if (mbuf_pool == NULL) rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
+  test_source_buffer_reused_after_schedule();
   test_basic_scheduling();
   test_wire_format();
   test_multi_section();

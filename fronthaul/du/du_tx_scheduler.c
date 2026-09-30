@@ -12,10 +12,19 @@
 #define MAX_MBUFS_PER_SYMBOL 64
 #define MAX_ANTENNAS 4
 #define NR_NUMBER_OF_SUBFRAMES_PER_FRAME 10
+// 3GPP max carrier bandwidth (400MHz @ 120kHz SCS), matching du_fhi_isolate.c's
+// DU_FHI_MAX_SCRATCH_PRB -- upper bound for the owned per-job IQ sample copy below.
+#define MAX_PRB 275
 
 typedef struct {
   uint64_t send_at_symbol;
   uint64_t ota_absolute_symbol;
+  // Owned copy of this symbol's frequency-domain IQ, one buffer per antenna. The caller
+  // (du_fhi_south_out) only guarantees its txdataF argument is valid for the duration of the
+  // du_tx_schedule_dl_iq() call -- actual transmission happens later, once send_at_symbol's
+  // T1a_up-windowed time arrives (see du_tx_handle_absolute_symbol_tick/dispatch_job), so the
+  // data must be copied in at enqueue time rather than referenced by pointer.
+  uint32_t txdataF_storage[MAX_ANTENNAS][MAX_PRB * NR_NB_SC_PER_RB];
   uint32_t *txdataF[MAX_ANTENNAS];
   int nb_tx;
   uint64_t hyper_frame;
@@ -36,6 +45,8 @@ typedef struct du_tx_cplane_job_s {
   int num_symbol;
   du_tx_dl_section_t sections[MAX_SECTIONS_PER_JOB];
   int num_sections;
+  bool is_prach; // section type 3 from `prach` instead of type 1 from `sections`
+  du_tx_prach_section_t prach;
   struct du_tx_cplane_job_s *next;
 } du_tx_cplane_job_t;
 
@@ -52,6 +63,7 @@ typedef struct {
   uint64_t window_tail_symbol;
   uint64_t cplane_window_tail_symbol;
 
+
   int numerology;
   int num_prb;
   uint32_t T1a_up_max_sym_diff;
@@ -67,7 +79,7 @@ typedef struct {
   void *io_controller;
 
   uint8_t seq_id[MAX_ANTENNAS];
-  uint8_t cplane_seq_id[MAX_ANTENNAS];
+  uint8_t cplane_seq_id[16]; // per eAxC RU port, PRACH ports sit above the PUSCH ones
 
   du_tx_scheduler_stats_t stats;
 } du_tx_scheduler_context_t;
@@ -120,6 +132,7 @@ void *init_du_tx_scheduler(int numerology,
   return ctx;
 }
 
+
 void cleanup_du_tx_scheduler(void *context)
 {
   du_tx_scheduler_context_t *ctx = (du_tx_scheduler_context_t *)context;
@@ -165,8 +178,10 @@ void du_tx_schedule_dl_iq(void *context,
         job->send_at_symbol = send_at_symbol;
         job->ota_absolute_symbol = ota_absolute_symbol;
         job->nb_tx = nb_tx;
+        size_t num_prb_bytes = (size_t)ctx->num_prb * NR_NB_SC_PER_RB * sizeof(uint32_t);
         for (int i = 0; i < nb_tx; i++) {
-          job->txdataF[i] = txdataF[i];
+          memcpy(job->txdataF_storage[i], txdataF[i], num_prb_bytes);
+          job->txdataF[i] = job->txdataF_storage[i];
         }
         job->hyper_frame = hyper_frame;
         job->frame = frame;
@@ -244,6 +259,7 @@ void du_tx_schedule_ul_grant(void *context,
     cp_job->slot = slot;
     cp_job->start_symbol = start_symbol;
     cp_job->num_symbol = 1;
+    cp_job->is_prach = false;
     cp_job->num_sections = num_sections;
     for (int i = 0; i < num_sections; i++) {
       cp_job->sections[i] = sections[i];
@@ -253,6 +269,46 @@ void du_tx_schedule_ul_grant(void *context,
     cp_job->next = ctx->cplane_symbol_tx_window[cp_job_index];
     ctx->cplane_symbol_tx_window[cp_job_index] = cp_job;
   }
+}
+
+void du_tx_schedule_prach(void *context,
+                          uint64_t hyper_frame,
+                          int frame,
+                          int slot,
+                          int start_symbol,
+                          int ant_id,
+                          const du_tx_prach_section_t *prach)
+{
+  du_tx_scheduler_context_t *ctx = (du_tx_scheduler_context_t *)context;
+  int slots_per_subframe = 1 << ctx->numerology;
+  int num_symbols_per_frame = NR_NUMBER_OF_SUBFRAMES_PER_FRAME * slots_per_subframe * NR_SYMBOLS_PER_SLOT;
+  uint64_t ota_absolute_symbol = (hyper_frame * 1024ULL * num_symbols_per_frame) +
+                                 ((uint64_t)frame * num_symbols_per_frame) +
+                                 ((uint64_t)slot * NR_SYMBOLS_PER_SLOT) + start_symbol;
+  uint64_t cp_send_at_symbol = ota_absolute_symbol - (ctx->T1a_cp_ul_max_sym_diff - 1);
+  if (ctx->current_absolute_symbol > 0 && cp_send_at_symbol <= ctx->current_absolute_symbol) {
+    ctx->stats.ul_grant_too_late++;
+    return;
+  }
+
+  du_tx_cplane_job_t *cp_job;
+  if (rte_ring_dequeue(ctx->free_cplane_jobs, (void **)&cp_job) != 0) {
+    ctx->stats.out_of_mbufs++;
+    return;
+  }
+  cp_job->send_at_symbol = cp_send_at_symbol;
+  cp_job->direction = XRAN_DIR_UL;
+  cp_job->ant_id = ant_id;
+  cp_job->frame = frame;
+  cp_job->slot = slot;
+  cp_job->start_symbol = start_symbol;
+  cp_job->num_symbol = prach->num_symbol;
+  cp_job->num_sections = 1;
+  cp_job->is_prach = true;
+  cp_job->prach = *prach;
+  uint32_t cp_job_index = cp_send_at_symbol % WINDOW_DEPTH;
+  cp_job->next = ctx->cplane_symbol_tx_window[cp_job_index];
+  ctx->cplane_symbol_tx_window[cp_job_index] = cp_job;
 }
 
 static void dispatch_cplane_job(du_tx_scheduler_context_t *ctx, du_tx_cplane_job_t *job)
@@ -277,12 +333,23 @@ static void dispatch_cplane_job(du_tx_scheduler_context_t *ctx, du_tx_cplane_job
     uint8_t subframe = job->slot / slots_per_subframe;
     uint8_t slot_id = job->slot % slots_per_subframe;
 
-    fill_cplane_section1(pkt, &ctx->eaxcid_config,
-                         job->direction, job->frame, subframe, slot_id, job->start_symbol,
-                         0, udComp,
-                         0, job->ant_id, seq,
-                         job->sections[s].section_id, job->sections[s].beam_id, job->num_symbol,
-                         job->sections[s].start_prb, job->sections[s].num_prb, 0xFFF, 0, 0);
+    if (job->is_prach) {
+      const du_tx_prach_section_t *p = &job->prach;
+      fill_cplane_section3(pkt, &ctx->eaxcid_config,
+                           job->frame, subframe, slot_id, job->start_symbol,
+                           p->filter_index, p->time_offset, p->scs, p->fft_size,
+                           0, udComp,
+                           0, job->ant_id, seq,
+                           p->section_id, p->beam_id, p->num_symbol,
+                           p->start_prb, p->num_prb, (uint32_t)p->freq_offset);
+    } else {
+      fill_cplane_section1(pkt, &ctx->eaxcid_config,
+                           job->direction, job->frame, subframe, slot_id, job->start_symbol,
+                           0, udComp,
+                           0, job->ant_id, seq,
+                           job->sections[s].section_id, job->sections[s].beam_id, job->num_symbol,
+                           job->sections[s].start_prb, job->sections[s].num_prb, 0xFFF, 0, 0);
+    }
 
     if (num_mbufs == (MAX_MBUFS_PER_SYMBOL - 1)) {
       ctx->send_func(ctx->io_controller, mbufs, num_mbufs);
