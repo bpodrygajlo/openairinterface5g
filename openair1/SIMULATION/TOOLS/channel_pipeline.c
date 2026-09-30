@@ -7,6 +7,8 @@
 #include "channel_pipeline.h"
 #include "task_ans.h"
 #include "noise_device.h"
+
+static noise_device_t *noise_device;
 #include "thread-pool.h"
 
 typedef struct {
@@ -49,7 +51,7 @@ void do_convolution_and_noise(int nb_tx,
   for (int batch_start = job_index * batch_size; batch_start < num_samples; batch_start += batch_size * num_jobs) {
     int batch_end = min(batch_start + batch_size, num_samples);
     if (noise_power > 0.0f) {
-      get_noise_vector((float *)work_buffer, batch_size * 2);
+      get_noise_vector(noise_device, (float *)work_buffer, batch_size * 2);
     }
     for (int i = batch_start; i < batch_end; i++) {
       float rx_r = 0.0f;
@@ -177,9 +179,10 @@ void channel_pipeline(void *tpool,
 }
 
 void channel_pipeline_init(float noise_power) {
-  init_noise_device(noise_power);
+  noise_device = init_noise_device(noise_power);
 }
 
 void channel_pipeline_shutdown(void) {
-  free_noise_device();
+  free_noise_device(noise_device);
+  noise_device = NULL;
 }
