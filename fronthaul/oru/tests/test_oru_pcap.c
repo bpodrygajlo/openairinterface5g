@@ -331,6 +331,19 @@ static void ref_check_dl_iq(uint32_t **txdataF, int frame, int slot, int symbol)
   }
 }
 
+// Places each stream's IQ verbatim at its PRB offset on its antenna, the way read_dl_iq() used to
+// fill txdataF - no rotation or weighting, so ref_check_dl_iq() can compare bit-exactly.
+static void place_dl_streams(uint32_t **txdataF, const dl_iq_stream_t *streams, int num_streams)
+{
+  for (int a = 0; a < MAX_ANTENNAS; a++)
+    memset(txdataF[a], 0, 273 * 12 * sizeof(uint32_t));
+  for (int i = 0; i < num_streams; i++) {
+    const dl_iq_stream_t *st = &streams[i];
+    if (st->ant_id < MAX_ANTENNAS)
+      memcpy(&txdataF[st->ant_id][st->start_prb * 12], st->iq, st->num_prb * 12 * sizeof(uint32_t));
+  }
+}
+
 // Returns true if the reference capture passed: all packets as generated, all expected messages present,
 // and the processor's DL IQ equal to what was sent
 static bool ref_report(uint64_t exp_c, uint64_t exp_u)
@@ -372,9 +385,9 @@ static bool ref_report(uint64_t exp_c, uint64_t exp_u)
 
 int main(int argc, char *argv[])
 {
-  if (argc < 11) {
+  if (argc < 12) {
     printf(
-        "Usage: %s <pcap_file> <initial_symbol> <num_dl_slots> <num_ul_slots> <num_dl_symbols> <num_ul_symbols> "
+        "Usage: %s <pcap_file> <numerology> <initial_symbol> <num_dl_slots> <num_ul_slots> <num_dl_symbols> <num_ul_symbols> "
         "<tdd_pattern_length_slots> <mtu> <prach_eaxc_offset> [<num_bf_weights> <min_ext1_received>] "
         "[--xran-ext1-reference <expected_cplane> <expected_uplane>] -- <eal args>\n",
         argv[0]);
@@ -404,16 +417,17 @@ int main(int argc, char *argv[])
   mp = rte_pktmbuf_pool_create("test_pool", 4096, 0, 0, 10240, rte_socket_id());
   assert(mp != NULL);
 
-  uint64_t initial_symbol = atoll(argv[2]);
-  int num_dl_slots = atoi(argv[3]);
-  int num_ul_slots = atoi(argv[4]);
-  int num_dl_symbols = atoi(argv[5]);
-  int num_ul_symbols = atoi(argv[6]);
-  int tdd_pattern_length_slots = atoi(argv[7]);
-  size_t mtu = atoi(argv[8]);
-  int prach_eaxc_offset = atoi(argv[9]);
+  int numerology = atoi(argv[2]);
+  uint64_t initial_symbol = atoll(argv[3]);
+  int num_dl_slots = atoi(argv[4]);
+  int num_ul_slots = atoi(argv[5]);
+  int num_dl_symbols = atoi(argv[6]);
+  int num_ul_symbols = atoi(argv[7]);
+  int tdd_pattern_length_slots = atoi(argv[8]);
+  size_t mtu = atoi(argv[9]);
+  int prach_eaxc_offset = atoi(argv[10]);
 
-  if (eal_args_start < 10) {
+  if (eal_args_start < 11) {
     printf("Error: Missing '--' separator for EAL arguments\n");
     return 1;
   }
@@ -424,7 +438,7 @@ int main(int argc, char *argv[])
   bool ext1_reference = false;
   uint64_t ref_exp_cplane = 0, ref_exp_uplane = 0;
   int num_positional = 0;
-  for (int i = 10; i < eal_args_start; i++) {
+  for (int i = 11; i < eal_args_start; i++) {
     if (strcmp(argv[i], "--xran-ext1-reference") == 0 && i + 2 < eal_args_start) {
       ext1_reference = true;
       ref_exp_cplane = strtoull(argv[++i], NULL, 0);
@@ -444,6 +458,7 @@ int main(int argc, char *argv[])
 
   printf("Starting test with parameters:\n");
   printf("  pcap: %s\n", argv[1]);
+  printf("  numerology: %d\n", numerology);
   printf("  initial_symbol: %lu\n", initial_symbol);
   printf("  TDD: DL %d slots + %d sym, UL %d slots + %d sym, Pattern Length %d slots\n",
          num_dl_slots,
@@ -457,7 +472,7 @@ int main(int argc, char *argv[])
   if (ext1_reference)
     printf("  xran ext1 reference: expected C-plane %lu, U-plane %lu\n", ref_exp_cplane, ref_exp_uplane);
 
-  void *ctx = init_packet_processor(1,
+  void *ctx = init_packet_processor(numerology,
                                     273,
                                     0,
                                     1500,
@@ -499,6 +514,10 @@ int main(int argc, char *argv[])
   for (int i = 0; i < MAX_ANTENNAS; i++)
     txdataF[i] = malloc(273 * 12 * sizeof(uint32_t));
 
+  static dl_iq_stream_t dl_streams[MAX_DL_FRAGMENTS_PER_SYMBOL];
+  static uint32_t *dl_iq_arena = NULL;
+  dl_iq_arena = malloc(DL_IQ_ARENA_PRBS(273) * 12 * sizeof(uint32_t));
+
   while (pcap_next_ex(pcap, &pkthdr, &packet) >= 0) {
     pkt_count++;
     double ts = pkthdr->ts.tv_sec + pkthdr->ts.tv_usec / 1000000.0;
@@ -538,7 +557,7 @@ int main(int argc, char *argv[])
         uint8_t slot = (fields >> 6) & 0x3F;
         uint8_t start_sym = (fields)&0x3F;
 
-        uint64_t target_sym = (uint64_t)frame * 280 + (subframe * 2 + slot) * 14 + start_sym;
+        uint64_t target_sym = (uint64_t)frame * (140 * (1 << numerology)) + (subframe * (1 << numerology) + slot) * 14 + start_sym;
         handle_absolute_symbol_tick(ctx, initial_symbol);
         last_tick_sym = initial_symbol;
         first_ts = ts;
@@ -547,7 +566,8 @@ int main(int argc, char *argv[])
       }
 
       if (synced) {
-        uint64_t elapsed_syms = (uint64_t)((ts - first_ts) / 0.0000357142857);
+        double sym_duration = 1.0 / (14000.0 * (1 << numerology));
+        uint64_t elapsed_syms = (uint64_t)((ts - first_ts) / sym_duration);
         uint64_t current_sym = initial_symbol + elapsed_syms;
 
         if (current_sym > last_tick_sym) {
@@ -563,8 +583,8 @@ int main(int argc, char *argv[])
                 write_ul_iq(ctx, txdataF[0], job.symbol + i, &job);
               }
             }
-            int frame = (s / 280) % 1024;
-            int slot = (s / 14) % 20;
+            int frame = (s / (140 * (1 << numerology))) % 1024;
+            int slot = (s / 14) % (10 * (1 << numerology));
             int sym = s % 14;
             write_prach_iq(ctx, txdataF, MAX_ANTENNAS, frame, slot, sym);
 
@@ -572,9 +592,11 @@ int main(int argc, char *argv[])
             int f, sl, sy;
             uint64_t hf;
             while (get_ready_job_count(ctx) > 0) {
-              read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &hf, &f, &sl, &sy);
-              if (ext1_reference)
+              int n = read_dl_iq_streams(ctx, dl_streams, dl_iq_arena, MAX_DL_FRAGMENTS_PER_SYMBOL, &hf, &f, &sl, &sy);
+              if (ext1_reference) {
+                place_dl_streams(txdataF, dl_streams, n);
                 ref_check_dl_iq(txdataF, f, sl, sy);
+              }
             }
           }
           last_tick_sym = current_sym;
@@ -602,9 +624,11 @@ int main(int argc, char *argv[])
     int f, sl, sy;
     uint64_t hf;
     while (get_ready_job_count(ctx) > 0) {
-      read_dl_iq(ctx, txdataF, MAX_ANTENNAS, &hf, &f, &sl, &sy);
-      if (ext1_reference)
+      int n = read_dl_iq_streams(ctx, dl_streams, dl_iq_arena, MAX_DL_FRAGMENTS_PER_SYMBOL, &hf, &f, &sl, &sy);
+      if (ext1_reference) {
+        place_dl_streams(txdataF, dl_streams, n);
         ref_check_dl_iq(txdataF, f, sl, sy);
+      }
     }
   }
 
@@ -641,6 +665,7 @@ int main(int argc, char *argv[])
     rte_mempool_free(mp);
   for (int i = 0; i < MAX_ANTENNAS; i++)
     free(txdataF[i]);
+  free(dl_iq_arena);
 
   if (stats.cplane_err_sect_ext != 0) {
     printf("FAIL: %lu malformed section extension(s)\n", stats.cplane_err_sect_ext);
