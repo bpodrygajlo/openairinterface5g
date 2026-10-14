@@ -234,16 +234,20 @@ void nr_common_signal_procedures(PHY_VARS_gNB *gNB, int frame, int slot, const n
 
   nr_generate_pbch(gNB, ssb_pdu, out, out_start_symbol, n_hf, frame, cfg, fp);
 
+  // the RBs of the PDU's PRGs, plus the one the SSB reaches into when it does not start on an RB boundary
+  AssertFatal(pb->num_prgs > 0 && pb->prg_size > 0, "SSB PDU without PRGs (%d of %d RBs)\n", pb->num_prgs, pb->prg_size);
   const int ssb_start_prb = fp->ssb_start_subcarrier / NR_NB_SC_PER_RB;
-  const int ssb_nb_prb = (fp->ssb_start_subcarrier % NR_NB_SC_PER_RB + 240 + NR_NB_SC_PER_RB - 1) / NR_NB_SC_PER_RB;
+  const int ssb_nb_prb = pb->num_prgs * pb->prg_size + (fp->ssb_start_subcarrier % NR_NB_SC_PER_RB != 0);
+  AssertFatal(ssb_start_prb + ssb_nb_prb <= fp->N_RB_DL,
+              "SSB RBs %d..%d outside of the %d RB carrier\n",
+              ssb_start_prb,
+              ssb_start_prb + ssb_nb_prb - 1,
+              fp->N_RB_DL);
   if (dbt) {
-    // the RBs of the PDU's PRGs, plus the one the SSB reaches into when it does not start on an RB boundary;
     // nr_dbt_beamform() also applies the phase compensation
-    AssertFatal(pb->num_prgs > 0 && pb->prg_size > 0, "SSB PDU without PRGs (%d of %d RBs)\n", pb->num_prgs, pb->prg_size);
-    const int num_rb = min(pb->num_prgs * pb->prg_size + (fp->ssb_start_subcarrier % NR_NB_SC_PER_RB != 0), fp->N_RB_DL - ssb_start_prb);
     for (int s = 0; s < NR_N_SYMBOLS_SSB; s++) {
       const c16_t *in = ssb_buf + s * fp->ofdm_symbol_size + ssb_start_prb * NR_NB_SC_PER_RB;
-      nr_dbt_beamform(gNB, pb, NULL, 1, 1, slot, ssb_start_symbol + s, ssb_start_prb, ssb_start_prb, num_rb, &in);
+      nr_dbt_beamform(gNB, pb, NULL, 1, 1, slot, ssb_start_symbol + s, ssb_start_prb, ssb_start_prb, ssb_nb_prb, &in);
     }
     return;
   }
