@@ -3869,21 +3869,26 @@ int ul_buffer_index(int frame, int slot, int slots_per_frame, int size)
   return abs_slot % size;
 }
 
+/* Called on the first scheduled slot: initializes the UL_tti_req_ahead ring
+ * and the slot at which UL scheduling starts (ul_next). */
 void UL_tti_req_ahead_initialization(nr_cell_sched_t *cell, int n, frame_t frameP, int slotP)
 {
 
   if(cell->UL_tti_req_ahead[1].Slot == 1)
     return;
 
-  /* fill in slot/frame numbers: slot is fixed, frame will be updated by scheduler
-   * consider that scheduler runs sl_ahead: the first sl_ahead slots are
-   * already "in the past" and thus we put frame 1 instead of 0! */
+  /* fill in slot/frame numbers: slot is fixed, frame will be updated by
+   * scheduler. Map each entry to the next occurrence of its slot, starting at
+   * frameP.slotP */
   for (int i = 0; i < cell->UL_tti_req_ahead_size; ++i) {
     int abs_slot = frameP * n + slotP + i;
     nfapi_nr_ul_tti_request_t *req = &cell->UL_tti_req_ahead[abs_slot % cell->UL_tti_req_ahead_size];
     req->SFN = (abs_slot / n) % MAX_FRAME_NUMBER;
     req->Slot = abs_slot % n;
   }
+
+  /* radio/PNF may start from any frame. Start UL scheduling from here */
+  cell->ul_next = (fsn_t){.f = frameP, .s = slotP, .mu = cell->ul_next.mu};
 }
 
 int get_beam_from_ssbidx(nr_cell_sched_t *cell, int ssb_idx)
