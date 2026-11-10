@@ -83,6 +83,8 @@ typedef struct {
   uint64_t cplane_err_sect_ext_chain; // ef promises an extension but the packet ends
   uint64_t cplane_err_sect_ext_other; // malformed extension of another type: bad extLen
   uint64_t uplane_err_late;
+  uint64_t dbg_late_window, dbg_late_nojob_released, dbg_late_nojob, dbg_late_mismatch_older, dbg_late_mismatch_newer;
+  int64_t dbg_mismatch_min, dbg_mismatch_max;
   uint64_t uplane_err_early;
   uint64_t uplane_err_dup;
   uint64_t uplane_err_prb_range; // start_prbu/num_prbu from the wire fell outside [0, ctx->num_prb)

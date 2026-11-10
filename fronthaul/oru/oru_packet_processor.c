@@ -562,6 +562,7 @@ void handle_uplane_packet(void *context, void *pkt)
   }
   if (diff < (int32_t)ctx->T2a_min_up_dl_sym_diff) {
     ctx->stats.uplane_err_late++;
+    ctx->stats.dbg_late_window++;
     rte_pktmbuf_free(pkt);
     return;
   }
@@ -576,12 +577,25 @@ void handle_uplane_packet(void *context, void *pkt)
   dl_symbol_job_t *job = ctx->dl_symbol_rx_window[job_index];
   if (!job) {
     ctx->stats.uplane_err_late++;
+    if (ctx->was_dl_symbol_completed[job_index])
+      ctx->stats.dbg_late_nojob_released++;
+    else
+      ctx->stats.dbg_late_nojob++;
     rte_pktmbuf_free(pkt);
     return;
   }
 
   if (job->absolute_symbol != target_absolute_symbol) {
     ctx->stats.uplane_err_late++;
+    int64_t d = (int64_t)job->absolute_symbol - (int64_t)target_absolute_symbol;
+    if (d < 0)
+      ctx->stats.dbg_late_mismatch_older++;
+    else
+      ctx->stats.dbg_late_mismatch_newer++;
+    if (d < ctx->stats.dbg_mismatch_min)
+      ctx->stats.dbg_mismatch_min = d;
+    if (d > ctx->stats.dbg_mismatch_max)
+      ctx->stats.dbg_mismatch_max = d;
     rte_pktmbuf_free(pkt);
     return;
   }
@@ -1094,6 +1108,7 @@ void print_packet_processor_stats(void *context)
     LOG_I(HW, "  U-Plane Timing Early Errors: %lu\n", ctx->stats.uplane_err_early);
   if (ctx->stats.uplane_err_late > 0)
     LOG_I(HW, "  U-Plane Timing Late Errors: %lu\n", ctx->stats.uplane_err_late);
+  LOG_I(HW, "  DBG late: window %lu nojob_released %lu nojob %lu mismatch_older %lu mismatch_newer %lu (job-target min %ld max %ld) cur_abs %lu win_tail %lu cp_tail %lu\n", ctx->stats.dbg_late_window, ctx->stats.dbg_late_nojob_released, ctx->stats.dbg_late_nojob, ctx->stats.dbg_late_mismatch_older, ctx->stats.dbg_late_mismatch_newer, ctx->stats.dbg_mismatch_min, ctx->stats.dbg_mismatch_max, ctx->current_absolute_symbol, ctx->window_tail_symbol, ctx->cplane_closed_tail_symbol);
   if (ctx->stats.uplane_err_dup > 0)
     LOG_I(HW, "  U-Plane Duplicate Packet Errors: %lu\n", ctx->stats.uplane_err_dup);
   if (ctx->stats.uplane_missing_cplane > 0)
